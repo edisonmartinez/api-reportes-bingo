@@ -1,3 +1,7 @@
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -131,4 +135,81 @@ def listado_rendicion(id_juego: int, db: Session = Depends(get_db)):
     except Exception as e:
         error_msg = f"Error al ejecutar el reporte: {str(e)}"
         logger.error(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+# ============================================
+# Endpoint de PRUEBA: Obtener persona por ID
+# ============================================
+class PersonaItem(BaseModel):
+    nombre: str
+    apellido: str
+
+@router.get("/persona/{persona_id}", response_model=PersonaItem)
+def obtener_persona(persona_id: int):
+    """
+    Reporte simple de prueba: obtiene nombre y apellido de una persona por su ID.
+    """
+    
+    # Obtener credenciales del entorno
+    DB_USER = os.getenv('DB_USER', 'amagno_api')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', 'AmagnoAPI_Secure2026!')
+    DB_HOST = os.getenv('DB_HOST', '132.255.166.96')
+    DB_PORT = os.getenv('DB_PORT', '5432')
+    DB_NAME = os.getenv('DB_NAME', 'Salvatore')
+    
+    conn = None
+    try:
+        logger.info(f"Buscando persona con id={persona_id}")
+        
+        # Conexión directa con psycopg2
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            options='-c client_encoding=UTF8'
+        )
+        
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        query = """
+            SELECT nombre, apellido 
+            FROM persona 
+            WHERE id = %s
+        """
+        
+        cur.execute(query, (persona_id,))
+        row = cur.fetchone()
+        
+        cur.close()
+        conn.close()
+        
+        if row is None:
+            raise HTTPException(status_code=404, detail="Persona no encontrada")
+        
+        # Manejo seguro de la decodificación
+        nombre = row['nombre']
+        apellido = row['apellido']
+        
+        # Si son bytes, decodificar
+        if isinstance(nombre, bytes):
+            nombre = nombre.decode('utf-8', errors='replace')
+        if isinstance(apellido, bytes):
+            apellido = apellido.decode('utf-8', errors='replace')
+        
+        logger.info(f"Persona encontrada: {nombre} {apellido}")
+        
+        return {
+            "nombre": nombre,
+            "apellido": apellido
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Error al obtener persona: {str(e)}"
+        logger.error(error_msg)
+        if conn:
+            conn.close()
         raise HTTPException(status_code=500, detail=error_msg)
