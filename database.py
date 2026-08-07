@@ -15,13 +15,24 @@ DB_PORT = os.getenv('DB_PORT', '5432')
 DB_NAME = os.getenv('DB_NAME', 'Salvatore')
 
 # Construir URL de conexión
-SQLALCHEMY_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+#SQLALCHEMY_DATABASE_URL = #f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+SQLALCHEMY_DATABASE_URL = (
+    f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    f"?client_encoding=UTF8&connect_timeout=10"
+)
 
 # Mensaje de depuración para saber a dónde se está conectando
 print(f"--- CONECTANDO A BD: {DB_HOST}:{DB_PORT}/{DB_NAME} ---")
 
 # Crear motor de base de datos
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+#engine = create_engine(SQLALCHEMY_DATABASE_URL)
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    encoding='utf-8',
+    client_encoding='utf-8',
+    echo=False  # Cambia a True si quieres ver las consultas SQL en los logs
+)
 
 # Crear sesión
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -33,6 +44,8 @@ Base = declarative_base()
 def get_db():
     db = SessionLocal()
     try:
+        # Forzar UTF-8 en cada conexión
+        db.execute(text("SET client_encoding TO 'UTF8'"))
         yield db
     finally:
         db.close()
