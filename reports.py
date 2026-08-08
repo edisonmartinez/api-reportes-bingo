@@ -89,4 +89,4 @@ def obtener_persona(persona_id: int):
     except Exception as e:
         if conn:
             conn.close()
-        return {"error": "Fallo en consulta", "tipo": type(e).__name__}
+        return {"status": "FALLO", "error": str(e)}
