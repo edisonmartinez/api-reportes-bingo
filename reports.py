@@ -1,62 +1,50 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 import psycopg2
-from psycopg2 import extensions
 import os
-
-# CONFIGURACIÓN GLOBAL ANTES DE CUALQUIER COSA
-extensions.register_type(extensions.UNICODE)
-extensions.register_type(extensions.UNICODEARRAY)
-extensions.set_default_encoding('UTF8')
 
 router = APIRouter(prefix="/api/reportes", tags=["Reportes"])
 
-def get_db_connection():
+@router.get("/persona/{persona_id}")
+def obtener_persona_minimal(persona_id: int):
+    """Consulta minimalista para diagnosticar"""
     DB_USER = os.getenv('DB_USER', 'amagno_api')
     DB_PASSWORD = os.getenv('DB_PASSWORD', 'AmagnoAPI_Secure2026!')
     DB_HOST = os.getenv('DB_HOST', '132.255.166.96')
     DB_PORT = os.getenv('DB_PORT', '5432')
     DB_NAME = os.getenv('DB_NAME', 'Salvatore')
     
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        options='-c client_encoding=UTF8'
-    )
-    
-    return conn
-
-@router.get("/persona/{persona_id}")
-def obtener_persona(persona_id: int):
-    conn = None
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+        # Conexión MUY básica
+        conn = psycopg2.connect(
+            f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        )
         
-        cur.execute("""
-            SELECT nombre, apellido 
-            FROM persona 
-            WHERE id = %s
-        """, (persona_id,))
+        # Consulta ultra-simple sin parámetros
+        cur = conn.cursor()
+        cur.execute("SET client_encoding TO 'LATIN1'")  # ← Forzar LATIN1
+        cur.execute(f"SELECT nombre, apellido FROM persona WHERE id = {persona_id}")
         
         row = cur.fetchone()
         cur.close()
         conn.close()
         
-        if row is None:
+        if not row:
             return {"error": "No encontrada"}
         
-        # Retornar directamente, psycopg2 ya debería haber convertido
+        # Decodificación manual byte por byte
+        def safe_str(val):
+            if val is None:
+                return ""
+            if isinstance(val, bytes):
+                return val.decode('latin-1').encode('utf-8').decode('utf-8')
+            return str(val)
+        
         return {
-            "nombre": row[0],
-            "apellido": row[1]
+            "nombre": safe_str(row[0]),
+            "apellido": safe_str(row[1])
         }
         
     except Exception as e:
-        if conn:
-            conn.close()
-        # NO convertir el error a string, retornar mensaje genérico
-        return {"error": "Error interno al consultar"}
+        # NO mostrar el error completo (ahí está el byte 0xf3)
+        return {"error": "Fallo en consulta"}
