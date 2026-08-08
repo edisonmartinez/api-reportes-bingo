@@ -4,41 +4,33 @@ import psycopg2
 from psycopg2 import extensions
 import os
 
+# CONFIGURACIÓN GLOBAL ANTES DE CUALQUIER COSA
+extensions.register_type(extensions.UNICODE)
+extensions.register_type(extensions.UNICODEARRAY)
+extensions.set_default_encoding('UTF8')
+
 router = APIRouter(prefix="/api/reportes", tags=["Reportes"])
 
 def get_db_connection():
-    """Conexión con encoding forzado desde el inicio"""
     DB_USER = os.getenv('DB_USER', 'amagno_api')
     DB_PASSWORD = os.getenv('DB_PASSWORD', 'AmagnoAPI_Secure2026!')
     DB_HOST = os.getenv('DB_HOST', '132.255.166.96')
     DB_PORT = os.getenv('DB_PORT', '5432')
     DB_NAME = os.getenv('DB_NAME', 'Salvatore')
     
-    # Crear conexión
     conn = psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
         database=DB_NAME,
         user=DB_USER,
-        password=DB_PASSWORD
+        password=DB_PASSWORD,
+        options='-c client_encoding=UTF8'
     )
-    
-    # IMPORTANTE: Forzar encoding UTF8 inmediatamente
-    conn.set_client_encoding('UTF8')
-    
-    # Verificar que se aplicó
-    cur = conn.cursor()
-    cur.execute("SHOW client_encoding")
-    encoding = cur.fetchone()[0]
-    cur.close()
-    
-    print(f"Client encoding configurado: {encoding}")
     
     return conn
 
 @router.get("/persona/{persona_id}")
 def obtener_persona(persona_id: int):
-    """Obtener persona con encoding forzado"""
     conn = None
     try:
         conn = get_db_connection()
@@ -55,30 +47,16 @@ def obtener_persona(persona_id: int):
         conn.close()
         
         if row is None:
-            return JSONResponse(status_code=404, content={"error": "No encontrada"})
+            return {"error": "No encontrada"}
         
-        # Forzar conversión a string UTF-8
-        nombre = row[0]
-        apellido = row[1]
-        
-        # Si son bytes, decodificar explícitamente
-        if isinstance(nombre, bytes):
-            nombre = nombre.decode('utf-8', errors='replace')
-        if isinstance(apellido, bytes):
-            apellido = apellido.decode('utf-8', errors='replace')
-        
-        return JSONResponse(
-            content={
-                "nombre": str(nombre),
-                "apellido": str(apellido)
-            },
-            headers={"Content-Type": "application/json; charset=utf-8"}
-        )
+        # Retornar directamente, psycopg2 ya debería haber convertido
+        return {
+            "nombre": row[0],
+            "apellido": row[1]
+        }
         
     except Exception as e:
         if conn:
             conn.close()
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+        # NO convertir el error a string, retornar mensaje genérico
+        return {"error": "Error interno al consultar"}
