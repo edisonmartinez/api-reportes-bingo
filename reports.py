@@ -139,7 +139,7 @@ def listado_rendicion(fecha_sorteo: str):
             ORDER BY ped.nombre, ped.apellido
         """
         
-        cur.execute(query, (id_juego,))
+        cur.execute(query, (fecha_sorteo,))
         rows = cur.fetchall()
         cur.close()
         conn.close()
