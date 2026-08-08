@@ -70,8 +70,8 @@ def obtener_persona(persona_id: int):
 # ============================================
 # Endpoint 3: ListadoRendicion (REPORTE COMPLEJO)
 # ============================================
-@router.get("/listado-rendicion/{id_juego}")
-def listado_rendicion(id_juego: int):
+@router.get("/listado-rendicion/{fecha de sorteo}")
+def listado_rendicion(fecha_sorteo: str):
     """Reporte de rendición de operaciones por juego"""
     conn = None
     try:
