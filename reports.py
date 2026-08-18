@@ -178,12 +178,12 @@ def listado_rendicion(fecha_sorteo: str):
 def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
     """
     Reporte de rendición por tipo de juego y fecha de sorteo.
-    tipo_juego: 'bingo', '4x1' o 'rifa'
+    tipo_juego: 'bingo', 'combinado' o 'rifa'
     fecha_sorteo: Formato YYYY-MM-DD (ej: 2024-01-15)
     """
     
     # 1. Validar que el tipo de juego sea permitido (Seguridad)
-    tipos_validos = ["bingo", "4x1", "rifa"]
+    tipos_validos = ["bingo", "combinado", "rifa"]
     if tipo_juego not in tipos_validos:
         return {"error": f"Tipo de juego no válido. Use uno de: {', '.join(tipos_validos)}"}
 
@@ -220,7 +220,7 @@ def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
             ORDER BY ped.nombre, ped.apellido
         """
     
-    elif tipo_juego == "4x1" or tipo_juego == "4X1":
+    elif tipo_juego == "combinado":
         query = """
             SELECT
                 ope.numero_operacion,
