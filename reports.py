@@ -220,7 +220,7 @@ def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
             ORDER BY ped.nombre, ped.apellido
         """
     
-    elif tipo_juego == "4x1":
+    elif tipo_juego == "4x1" or tipo_juego == "4X1":
         query = """
             SELECT
                 ope.numero_operacion,
