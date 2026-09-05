@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Optional
 import psycopg2
@@ -430,6 +430,9 @@ def arqueo_caja(
         game_filter_sql = """
             AND (
                 EXISTS (SELECT 1 FROM juego j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN :fsi AND :fsf) OR
+                EXISTS (SELECT 1 FROM juego_bingo5 j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN :fsi AND :fsf) OR
+                EXISTS (SELECT 1 FROM juego_bingo10 j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN :fsi AND :fsf) OR
+                EXISTS (SELECT 1 FROM juego_bingo25 j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN :fsi AND :fsf) OR
                 EXISTS (SELECT 1 FROM juego_binrifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN :fsi AND :fsf) OR
                 EXISTS (SELECT 1 FROM juego_rifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN :fsi AND :fsf)
             )
