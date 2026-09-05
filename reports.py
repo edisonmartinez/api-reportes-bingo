@@ -252,7 +252,7 @@ def arqueo_caja(
             ROW_NUMBER() OVER (ORDER BY det.caja, det.fecha, det.hora, det.numero_tipo_movimiento, det.numero_tipo_operacion) AS item,
             det.*
         FROM (
-            -- BLOQUE 1: Ventas Directas
+            -- BLOQUE 1: Ventas Directas (UNION de todos los juegos)
             SELECT 
                 ope.id_caja, caj.numero_arqueo, caj.denominacion AS caja, 
                 ope.id_funcionario, COALESCE(pef.nombre || ' ' || pef.apellido, '') AS funcionario,
@@ -260,9 +260,12 @@ def arqueo_caja(
                 '2' AS numero_tipo_operacion, 'INGRESO VENTA DIRECTA' AS tipo_operacion,
                 'Venta de cartón: Rendición' AS concepto, 'CONTADO VENTA' AS concepto_general,
                 per.id AS id_persona, COALESCE(per.nombre || ' ' || per.apellido, '') AS persona,
-                ope.numero_operacion, cob.fecha, cob.hora, tva.denominacion AS tipo_valor,
-                ope.tipo_juego || ' ' || to_char(jue.fecha_sorteo, 'DD/MM/YY') AS juego,
-                cob.monto
+                ope.numero_operacion, 
+                ope.fecha,      -- ✅ CORREGIDO: era cob.fecha
+                ope.hora,       -- ✅ CORREGIDO: era cob.hora
+                tva.denominacion AS tipo_valor,
+                ope.tipo_juego || ' ' || to_char(ope.fecha_sorteo, 'DD/MM/YY') AS juego,
+                ope.monto
             FROM (
                 SELECT id_caja, id_funcionario, 'Combinado' AS tipo_juego, ope.numero_operacion, ope.id_distribuidor, cob.fecha, cob.hora, cob.id_tipo_valor, jue.fecha_sorteo, cob.monto, cob.id_estado, ope.id_juego
                 FROM operacion_binrifa_detalle_cobro cob LEFT JOIN operacion_binrifa ope ON cob.id_operacion = ope.id LEFT JOIN juego_binrifa jue ON ope.id_juego = jue.id
@@ -280,9 +283,9 @@ def arqueo_caja(
             LEFT JOIN persona per ON dis.id_persona = per.id
             LEFT JOIN tipo_detalle_subtipo tva ON ope.id_tipo_valor = tva.id
             WHERE ope.id_estado = 464 AND ope.id_tipo_valor = 450
-              AND cob.fecha BETWEEN %s AND %s
+              AND ope.fecha BETWEEN %s AND %s   -- ✅ CORREGIDO: era cob.fecha
               {game_filter_sql}
-
+              
             UNION ALL
 
             -- BLOQUE 2: Cobros
