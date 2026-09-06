@@ -352,18 +352,10 @@ def arqueo_caja(
     params = {}
 
     # CASO A: Solo filtro por tipo de juego (sin fechas de sorteo)
+    # Usamos LIKE sobre det.juego como en tu consulta original
     if tipo_juego and not fecha_sorteo_inicio and not fecha_sorteo_fin:
-        tablas_juego = {
-            "bingo": ["juego"],
-            "combinado": ["juego_binrifa"],
-            "rifa": ["juego_rifa"],
-            "super5": ["juego_bingo5"],
-            "super10": ["juego_bingo10"],
-            "animalitos": ["juego_bingo25"]
-        }
-        tabla = tablas_juego.get(tipo_juego.lower())
-        if tabla:
-            game_filter_sql = f" AND EXISTS (SELECT 1 FROM {tabla[0]} j WHERE j.id = det.id_juego)"
+        game_filter_sql = f" AND UPPER(det.juego) LIKE UPPER(%(tj)s)"
+        params["tj"] = f"{tipo_juego.upper()}%"
 
     # CASO B: Filtro por fechas de sorteo (con o sin tipo de juego específico)
     elif fecha_sorteo_inicio or fecha_sorteo_fin:
@@ -381,7 +373,6 @@ def arqueo_caja(
         if tipo_juego:
             tablas_a_buscar = tablas_juego.get(tipo_juego.lower(), [])
         else:
-            # Si no hay tipo pero sí fechas, busca en todas las tablas de juegos
             tablas_a_buscar = list(set().union(*tablas_juego.values()))
 
         for tbl in tablas_a_buscar:
