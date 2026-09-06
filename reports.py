@@ -340,7 +340,7 @@ def arqueo_caja(
     fecha_sorteo_fin: Optional[str] = Query(None, description="Fin rango fecha sorteo (YYYY-MM-DD)"),
     tipo_movimiento: Optional[str] = Query(None, description="INGRESO o EGRESO"),
     tipo_operacion: Optional[str] = Query(None, description="Buscar en tipo_operacion (LIKE)"),
-    concepto: Optional[str] = Query(None, description="Buscar en concepto (LIKE)")
+    concepto_general: Optional[str] = Query(None, description="Buscar en concepto (LIKE)")
 ):
     # 1. Validaciones básicas
     tipos_validos = ["bingo", "combinado", "rifa", "super5", "super10", "animalitos"]
@@ -413,9 +413,9 @@ def arqueo_caja(
         extra_filters.append("UPPER(det.tipo_operacion) LIKE UPPER(%(to)s)")
         params["to"] = f"%{tipo_operacion}%"
         
-    if concepto:
-        extra_filters.append("UPPER(det.concepto) LIKE UPPER(%(con)s)")
-        params["con"] = f"%{concepto}%"
+    if concepto_general:
+        extra_filters.append("UPPER(det.concepto_general) LIKE UPPER(%(con)s)")
+        params["con"] = f"%{concepto_general}%"
 
     where_extra = "".join([f" AND {f}" for f in extra_filters])
 
