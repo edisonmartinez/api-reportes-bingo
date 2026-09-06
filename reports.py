@@ -351,7 +351,6 @@ def arqueo_caja(
     game_filter_sql = ""
     params = {}
 
-    # Lógica para filtrar por tablas nativas usando EXISTS
     if tipo_juego or fecha_sorteo_inicio or fecha_sorteo_fin:
         conditions = []
         
@@ -365,7 +364,7 @@ def arqueo_caja(
             "animalitos": ["juego_bingo25"]
         }
 
-        # Si se especifica un tipo de juego, solo busca en esa tabla
+        # Determinar qué tablas buscar
         if tipo_juego:
             tablas_a_buscar = tablas_juego.get(tipo_juego.lower(), [])
         else:
@@ -375,7 +374,8 @@ def arqueo_caja(
         for tabla in tablas_a_buscar:
             cond = f"EXISTS (SELECT 1 FROM {tabla} j WHERE j.id = det.id_juego"
             
-            # Agregar filtro de fecha de sorteo si existe
+            # ✅ CORRECCIÓN: Agregar filtro de fecha de sorteo SOLO si existe
+            # Pero la condición EXISTS debe agregarse SIEMPRE que haya tipo_juego
             if fecha_sorteo_inicio and fecha_sorteo_fin:
                 cond += " AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s"
             elif fecha_sorteo_inicio:
@@ -392,7 +392,7 @@ def arqueo_caja(
             # Solo agregar params de sorteo si se usan en la condición
             if fecha_sorteo_inicio: params["fsi"] = fecha_sorteo_inicio
             if fecha_sorteo_fin: params["fsf"] = fecha_sorteo_fin
-
+            
     # 3. Filtros adicionales seguros con LIKE
     extra_filters = []
     
