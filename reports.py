@@ -172,9 +172,9 @@ def listado_rendicion(fecha_sorteo: str):
             conn.close()
         return {"error": str(e)}
 
-# ============================================
+# ========================================================
 # Endpoint 4: ListadoRendicion (TIPO JUEGO / FECHA SORTEO)
-# ============================================
+# ========================================================
 @router.get("/listado-rendicion/{tipo_juego}/{fecha_sorteo}")
 def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
     """
@@ -327,86 +327,101 @@ def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
         return {"error": str(e)}
     
 # ============================================
-# Endpoint 5: Movimiento Caja (TIPO JUEGO / FECHA SORTEO)
+# Endpoint 5: Arqueo Caja (TIPO JUEGO / FECHA SORTEO)
 # ============================================
-
 @router.get("/arqueo-caja")
 def arqueo_caja(
-    fecha_inicio: str = Query(..., description="Fecha inicio (YYYY-MM-DD)"),
-    fecha_fin: str = Query(..., description="Fecha fin (YYYY-MM-DD)"),
-    tipo_juego: Optional[str] = Query(None, description="Filtrar por: bingo, combinado o rifa"),
-    fecha_sorteo_inicio: Optional[str] = Query(None, description="Inicio rango sorteo (YYYY-MM-DD)"),
-    fecha_sorteo_fin: Optional[str] = Query(None, description="Fin rango sorteo (YYYY-MM-DD)"),
-    tipo_valor: Optional[str] = Query(None, description="Texto para buscar en tipo_valor (LIKE)"),
+    fecha_inicio: str = Query(..., description="Fecha inicio operación (YYYY-MM-DD)"),
+    fecha_fin: str = Query(..., description="Fecha fin operación (YYYY-MM-DD)"),
+    id_caja: Optional[int] = Query(None, description="ID de caja específica"),
+    tipo_valor: Optional[str] = Query(None, description="Buscar en tipo_valor (LIKE)"),
+    tipo_juego: Optional[str] = Query(None, description="Filtrar por: bingo, combinado, rifa, super5, super10, animalitos"),
+    fecha_sorteo_inicio: Optional[str] = Query(None, description="Inicio rango fecha sorteo (YYYY-MM-DD)"),
+    fecha_sorteo_fin: Optional[str] = Query(None, description="Fin rango fecha sorteo (YYYY-MM-DD)"),
     tipo_movimiento: Optional[str] = Query(None, description="INGRESO o EGRESO"),
-    tipo_operacion: Optional[str] = Query(None, description="Ej: PREMIO, VENTA DIRECTA"),
-    concepto: Optional[str] = Query(None, description="Texto para buscar en concepto (LIKE)")
+    tipo_operacion: Optional[str] = Query(None, description="Buscar en tipo_operacion (LIKE)"),
+    concepto: Optional[str] = Query(None, description="Buscar en concepto (LIKE)")
 ):
     # 1. Validaciones básicas
-    tipos_validos = ["bingo", "combinado", "rifa"]
+    tipos_validos = ["bingo", "combinado", "rifa", "super5", "super10", "animalitos"]
     if tipo_juego and tipo_juego.lower() not in tipos_validos:
         return {"error": f"tipo_juego debe ser uno de: {tipos_validos}"}
 
-    # 2. Construcción dinámica del WHERE según el tipo de juego seleccionado
+    # 2. Construcción dinámica de filtros de juego/sorteo
     game_filter_sql = ""
-    
-    # Usamos %(nombre)s para parámetros nombrados de psycopg2
-    if tipo_juego == "bingo":
-        game_filter_sql = """
-            AND EXISTS (SELECT 1 FROM juego j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s)
-        """
-    elif tipo_juego == "combinado":
-        game_filter_sql = """
-            AND EXISTS (SELECT 1 FROM juego_binrifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s)
-        """
-    elif tipo_juego == "rifa":
-        game_filter_sql = """
-            AND EXISTS (SELECT 1 FROM juego_rifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s)
-        """
-    elif not tipo_juego and (fecha_sorteo_inicio or fecha_sorteo_fin):
-        game_filter_sql = """
-            AND (
-                EXISTS (SELECT 1 FROM juego j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s) OR
-                EXISTS (SELECT 1 FROM juego_binrifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s) OR
-                EXISTS (SELECT 1 FROM juego_rifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s)
-            )
-        """
-
-    # Preparar diccionario de parámetros nombrados
     params = {}
-    
-    # Agregar fechas de sorteo si existen
-    if tipo_juego in ["bingo", "combinado", "rifa"]:
-        params["fsi"] = fecha_sorteo_inicio
-        params["fsf"] = fecha_sorteo_fin
-    elif not tipo_juego and (fecha_sorteo_inicio or fecha_sorteo_fin):
-        # Para el OR de todas las tablas, necesitamos los mismos params
-        params["fsi"] = fecha_sorteo_inicio
-        params["fsf"] = fecha_sorteo_fin
 
-    # Filtros LIKE adicionales
-    like_clauses = []
+    # Lógica para filtrar por tablas nativas usando EXISTS
+    if tipo_juego or fecha_sorteo_inicio or fecha_sorteo_fin:
+        conditions = []
+        
+        # Mapeo de tipos de juego a sus tablas
+        tablas_juego = {
+            "bingo": ["juego"],
+            "combinado": ["juego_binrifa"],
+            "rifa": ["juego_rifa"],
+            "super5": ["juego_bingo5"],
+            "super10": ["juego_bingo10"],
+            "animalitos": ["juego_bingo25"]
+        }
+
+        # Si se especifica un tipo de juego, solo busca en esa tabla
+        if tipo_juego:
+            tablas_a_buscar = tablas_juego.get(tipo_juego.lower(), [])
+        else:
+            # Si no hay tipo pero sí fechas, busca en todas las tablas de juegos
+            tablas_a_buscar = list(set().union(*tablas_juego.values()))
+
+        for tabla in tablas_a_buscar:
+            cond = f"EXISTS (SELECT 1 FROM {tabla} j WHERE j.id = det.id_juego"
+            
+            # Agregar filtro de fecha de sorteo si existe
+            if fecha_sorteo_inicio and fecha_sorteo_fin:
+                cond += " AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s"
+            elif fecha_sorteo_inicio:
+                cond += " AND j.fecha_sorteo >= %(fsi)s"
+            elif fecha_sorteo_fin:
+                cond += " AND j.fecha_sorteo <= %(fsf)s"
+                
+            cond += ")"
+            conditions.append(cond)
+
+        if conditions:
+            game_filter_sql = " AND (" + " OR ".join(conditions) + ")"
+            
+            # Solo agregar params de sorteo si se usan en la condición
+            if fecha_sorteo_inicio: params["fsi"] = fecha_sorteo_inicio
+            if fecha_sorteo_fin: params["fsf"] = fecha_sorteo_fin
+
+    # 3. Filtros adicionales seguros con LIKE
+    extra_filters = []
+    
+    if id_caja is not None:
+        extra_filters.append("caj.id = %(id_caja)s")
+        params["id_caja"] = id_caja
+        
     if tipo_valor:
-        like_clauses.append("UPPER(tva.denominacion) LIKE UPPER(%(tv)s)")
+        extra_filters.append("UPPER(det.tipo_valor) LIKE UPPER(%(tv)s)")
         params["tv"] = f"%{tipo_valor}%"
+        
     if tipo_movimiento:
-        like_clauses.append("UPPER(det.tipo_movimiento) = UPPER(%(tm)s)")
+        extra_filters.append("UPPER(det.tipo_movimiento) = UPPER(%(tm)s)")
         params["tm"] = tipo_movimiento
+        
     if tipo_operacion:
-        like_clauses.append("UPPER(det.tipo_operacion) LIKE UPPER(%(to)s)")
+        extra_filters.append("UPPER(det.tipo_operacion) LIKE UPPER(%(to)s)")
         params["to"] = f"%{tipo_operacion}%"
+        
     if concepto:
-        like_clauses.append("UPPER(det.concepto) LIKE UPPER(%(con)s)")
+        extra_filters.append("UPPER(det.concepto) LIKE UPPER(%(con)s)")
         params["con"] = f"%{concepto}%"
 
-    extra_filters = " AND ".join(like_clauses)
-    if extra_filters:
-        extra_filters = f" AND {extra_filters}"
+    where_extra = "".join([f" AND {f}" for f in extra_filters])
 
-    # 3. Consulta Base CORREGIDA con parámetros nombrados
+    # 4. Consulta Base Optimizada
     base_query = f"""
         SELECT 
-            ROW_NUMBER() OVER (ORDER BY det.caja, det.fecha, det.hora, det.numero_tipo_movimiento, det.numero_tipo_operacion) AS item,
+            ROW_NUMBER() OVER (ORDER BY caj.denominacion, det.fecha, det.hora, det.numero_tipo_movimiento, det.numero_tipo_operacion) AS item,
             det.*
         FROM (
             -- BLOQUE 1: Ventas Directas
@@ -417,106 +432,98 @@ def arqueo_caja(
                 '2' AS numero_tipo_operacion, 'INGRESO VENTA DIRECTA' AS tipo_operacion,
                 'Venta de cartón: Rendición' AS concepto, 'CONTADO VENTA' AS concepto_general,
                 per.id AS id_persona, COALESCE(per.nombre || ' ' || per.apellido, '') AS persona,
-                ope.numero_operacion, 
-                ope.fecha,      
-                ope.hora,       
-                tva.denominacion AS tipo_valor,
+                ope.numero_operacion, ope.fecha, ope.hora, tva.denominacion AS tipo_valor,
                 ope.tipo_juego || ' ' || to_char(ope.fecha_sorteo, 'DD/MM/YY') AS juego,
-                ope.monto
-            FROM (
-                SELECT id_caja, id_funcionario, 'Combinado' AS tipo_juego, ope.numero_operacion, ope.id_distribuidor, cob.fecha, cob.hora, cob.id_tipo_valor, jue.fecha_sorteo, cob.monto, cob.id_estado, ope.id_juego
-                FROM operacion_binrifa_detalle_cobro cob LEFT JOIN operacion_binrifa ope ON cob.id_operacion = ope.id LEFT JOIN juego_binrifa jue ON ope.id_juego = jue.id
-                UNION ALL
-                SELECT id_caja, id_funcionario, 'Bingo' AS tipo_juego, ope.numero_operacion, ope.id_distribuidor, cob.fecha, cob.hora, cob.id_tipo_valor, jue.fecha_sorteo, cob.monto, cob.id_estado, ope.id_juego
-                FROM operacion_bingo_detalle_cobro cob LEFT JOIN operacion_bingo ope ON cob.id_operacion = ope.id LEFT JOIN juego jue ON ope.id_juego = jue.id
-                UNION ALL
-                SELECT id_caja, id_funcionario, 'Rifa' AS tipo_juego, ope.numero_operacion, ope.id_distribuidor, cob.fecha, cob.hora, cob.id_tipo_valor, jue.fecha_sorteo, cob.monto, cob.id_estado, ope.id_juego
-                FROM operacion_rifa_detalle_cobro cob LEFT JOIN operacion_rifa ope ON cob.id_operacion = ope.id LEFT JOIN juego_rifa jue ON ope.id_juego = jue.id
-            ) AS ope
-            LEFT JOIN caja caj ON ope.id_caja = caj.id
-            LEFT JOIN funcionario fun ON ope.id_funcionario = fun.id
-            LEFT JOIN persona pef ON fun.id_persona = pef.id
-            LEFT JOIN distribuidor dis ON ope.id_distribuidor = dis.id
-            LEFT JOIN persona per ON dis.id_persona = per.id
-            LEFT JOIN tipo_detalle_subtipo tva ON ope.id_tipo_valor = tva.id
-            WHERE ope.id_estado = 464 AND ope.id_tipo_valor = 450
-              AND ope.fecha BETWEEN %(fi)s AND %(ff)s
-              {game_filter_sql}
+                ope.monto, 0.0 AS diferencia, ope.id_juego, ope.tipo_juego_raw
+            FROM ( 
+                SELECT id_caja, id_funcionario, 'Combinado' AS tipo_juego, 'COMBINADO' AS tipo_juego_raw, ope.numero_operacion, ope.id_distribuidor, cob.fecha, cob.hora, cob.id_tipo_valor, jue.fecha_sorteo, cob.monto, cob.id_estado, ope.id_juego
+                FROM operacion_binrifa_detalle_cobro cob LEFT JOIN operacion_binrifa ope ON cob.id_operacion = ope.id LEFT JOIN juego_binrifa jue ON ope.id_juego = jue.id WHERE cob.id_estado = 464 AND cob.id_tipo_valor = 450
+                UNION ALL 
+                SELECT id_caja, id_funcionario, 'Bingo' AS tipo_juego, 'BINGO' AS tipo_juego_raw, ope.numero_operacion, ope.id_distribuidor, cob.fecha, cob.hora, cob.id_tipo_valor, jue.fecha_sorteo, cob.monto, cob.id_estado, ope.id_juego
+                FROM operacion_bingo_detalle_cobro cob LEFT JOIN operacion_bingo ope ON cob.id_operacion = ope.id LEFT JOIN juego jue ON ope.id_juego = jue.id WHERE cob.id_estado = 464 AND cob.id_tipo_valor = 450
+                UNION ALL 
+                SELECT id_caja, id_funcionario, 'Rifa' AS tipo_juego, 'RIFA' AS tipo_juego_raw, ope.numero_operacion, ope.id_distribuidor, cob.fecha, cob.hora, cob.id_tipo_valor, jue.fecha_sorteo, cob.monto, cob.id_estado, ope.id_juego
+                FROM operacion_rifa_detalle_cobro cob LEFT JOIN operacion_rifa ope ON cob.id_operacion = ope.id LEFT JOIN juego_rifa jue ON ope.id_juego = jue.id WHERE cob.id_estado = 464 AND cob.id_tipo_valor = 450
+            ) AS ope 
+            LEFT JOIN caja caj ON ope.id_caja = caj.id 
+            LEFT JOIN funcionario fun ON ope.id_funcionario = fun.id 
+            LEFT JOIN persona pef ON fun.id_persona = pef.id 
+            LEFT JOIN distribuidor dis ON ope.id_distribuidor = dis.id 
+            LEFT JOIN persona per ON dis.id_persona = per.id 
+            LEFT JOIN tipo_detalle_subtipo tva ON ope.id_tipo_valor = tva.id 
 
             UNION ALL
 
             -- BLOQUE 2: Cobros
             SELECT 
-                cob.id_caja, caj.numero_arqueo, caj.denominacion AS caja,
-                cob.id_funcionario, COALESCE(pef.nombre || ' ' || pef.apellido, '') AS funcionario,
-                '1' AS numero_tipo_movimiento, 'INGRESO' AS tipo_movimiento,
+                cob.id_caja, caj.numero_arqueo, caj.denominacion AS caja, cob.id_funcionario, 
+                COALESCE(pef.nombre || ' ' || pef.apellido, '') AS funcionario, 
+                '1' AS numero_tipo_movimiento, 'INGRESO' AS tipo_movimiento, 
                 CASE WHEN cre.id IS NULL AND con.denominacion = 'APERTURA' THEN '1' ELSE '5' END AS numero_tipo_operacion,
                 CASE WHEN cre.id IS NULL AND con.denominacion = 'APERTURA' THEN 'APERTURA' ELSE 'INGRESOS VARIOS' END AS tipo_operacion,
                 CASE WHEN cre.id IS NULL THEN con.denominacion || ' - ' || cob.observacion ELSE 'Cobro Créd.Nº ' || cre.numero_credito END AS concepto,
-                con.denominacion AS concepto_general,
-                per.id AS id_persona, COALESCE(per.nombre || ' ' || per.apellido, '') AS persona,
+                con.denominacion AS concepto_general, per.id AS id_persona, 
+                COALESCE(per.nombre || ' ' || per.apellido, '') AS persona, 
                 cob.numero_operacion, cob.fecha, cob.hora, tva.denominacion AS tipo_valor,
-                '---' AS juego, cob.monto
+                '---' AS juego, cob.monto, 0.0 AS diferencia, NULL AS id_juego, NULL AS tipo_juego_raw
             FROM cobro cob
-            LEFT JOIN caja caj ON cob.id_caja = caj.id
-            LEFT JOIN funcionario fun ON cob.id_funcionario = fun.id
-            LEFT JOIN persona pef ON fun.id_persona = pef.id
-            LEFT JOIN tipo_detalle_subtipo tva ON cob.id_tipo_valor = tva.id
-            LEFT JOIN tipo_detalle_subtipo con ON cob.id_concepto = con.id
-            LEFT JOIN persona per ON cob.id_persona = per.id
+            LEFT JOIN caja caj ON cob.id_caja = caj.id 
+            LEFT JOIN funcionario fun ON cob.id_funcionario = fun.id 
+            LEFT JOIN persona pef ON fun.id_persona = pef.id 
+            LEFT JOIN tipo_detalle_subtipo tva ON cob.id_tipo_valor = tva.id 
+            LEFT JOIN tipo_detalle_subtipo con ON cob.id_concepto = con.id 
+            LEFT JOIN persona per ON cob.id_persona = per.id 
             LEFT JOIN credito_cobro cre ON cob.id_credito = cre.id
             WHERE cob.id_estado = 464
-              AND cob.fecha BETWEEN %(fi)s AND %(ff)s
-              {game_filter_sql}
 
             UNION ALL
 
             -- BLOQUE 3: Pagos
             SELECT 
-                pag.id_caja, caj.numero_arqueo, caj.denominacion AS caja,
-                pag.id_funcionario, COALESCE(pef.nombre || ' ' || pef.apellido, '') AS funcionario,
-                '2' AS numero_tipo_movimiento, 'EGRESO' AS tipo_movimiento,
+                pag.id_caja, caj.numero_arqueo, caj.denominacion AS caja, pag.id_funcionario, 
+                COALESCE(pef.nombre || ' ' || pef.apellido, '') AS funcionario, 
+                '2' AS numero_tipo_movimiento, 'EGRESO' AS tipo_movimiento, 
                 CASE WHEN cre.id IS NULL AND con.denominacion = 'RENDICION' THEN '4' ELSE '3' END AS numero_tipo_operacion,
                 CASE WHEN cre.id IS NULL AND con.denominacion = 'RENDICION' THEN 'RENDICION' ELSE 'EGRESOS VARIOS' END AS tipo_operacion,
                 CASE WHEN cre.id IS NULL THEN 'Pago: ' || con.denominacion || ' - ' || pag.referencia ELSE 'Pago Créd.Nº ' || cre.numero_credito END AS concepto,
-                con.denominacion AS concepto_general,
-                per.id AS id_persona, COALESCE(per.nombre || ' ' || per.apellido, '') AS persona,
+                con.denominacion AS concepto_general, per.id AS id_persona, 
+                COALESCE(per.nombre || ' ' || per.apellido, '') AS persona, 
                 pag.numero_operacion, pag.fecha, pag.hora, tva.denominacion AS tipo_valor,
-                '---' AS juego, pag.monto
+                '---' AS juego, COALESCE(det_pag.monto, pag.monto) AS monto, 0.0 AS diferencia, NULL AS id_juego, NULL AS tipo_juego_raw
             FROM pago pag
-            LEFT JOIN caja caj ON pag.id_caja = caj.id
-            LEFT JOIN funcionario fun ON pag.id_funcionario = fun.id
-            LEFT JOIN persona pef ON fun.id_persona = pef.id
-            LEFT JOIN persona per ON pag.id_persona = per.id
-            LEFT JOIN tipo_detalle_subtipo tva ON pag.id_tipo_valor = tva.id
-            LEFT JOIN tipo_detalle_subtipo con ON pag.id_concepto = con.id
+            LEFT JOIN (SELECT id_pago, SUM(monto) AS monto FROM pago_detalle GROUP BY id_pago) AS det_pag ON det_pag.id_pago = pag.id
+            LEFT JOIN caja caj ON pag.id_caja = caj.id 
+            LEFT JOIN funcionario fun ON pag.id_funcionario = fun.id 
+            LEFT JOIN persona pef ON fun.id_persona = pef.id 
+            LEFT JOIN persona per ON pag.id_persona = per.id 
+            LEFT JOIN tipo_detalle_subtipo tva ON pag.id_tipo_valor = tva.id 
+            LEFT JOIN tipo_detalle_subtipo con ON pag.id_concepto = con.id 
             LEFT JOIN credito_pago cre ON pag.id_credito = cre.id
             WHERE pag.id_estado = 489
-              AND pag.fecha BETWEEN %(fi)s AND %(ff)s
-              {game_filter_sql}
-              
         ) AS det
-        WHERE 1=1 {extra_filters}
-        ORDER BY det.caja, det.fecha, det.hora, det.numero_tipo_movimiento, det.numero_tipo_operacion
+        LEFT JOIN caja caj ON det.id_caja = caj.id
+        WHERE 1=1
+          AND det.fecha BETWEEN %(fi)s AND %(ff)s
+          {game_filter_sql}
+          {where_extra}
+        ORDER BY caj.denominacion, det.fecha, det.hora, det.numero_tipo_movimiento, det.numero_tipo_operacion
     """
 
-    # Agregar parámetros obligatorios de fecha general
+    # Parámetros obligatorios
     params["fi"] = fecha_inicio
     params["ff"] = fecha_fin
 
-    # 4. Ejecución segura con parámetros nombrados
+    # 5. Ejecución segura
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Ejecutar con diccionario de parámetros nombrados
         cur.execute(base_query, params)
         rows = cur.fetchall()
         cur.close()
         conn.close()
         
-        # Convertir Decimal a float para JSON nativo
+        # Limpieza de datos para JSON
         result = []
         for row in rows:
             clean_row = {}
@@ -532,4 +539,3 @@ def arqueo_caja(
     except Exception as e:
         if conn: conn.close()
         return {"error": str(e)}
-    
