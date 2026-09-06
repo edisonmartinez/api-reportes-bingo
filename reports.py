@@ -351,10 +351,23 @@ def arqueo_caja(
     game_filter_sql = ""
     params = {}
 
-    if tipo_juego or fecha_sorteo_inicio or fecha_sorteo_fin:
+    # CASO A: Solo filtro por tipo de juego (sin fechas de sorteo)
+    if tipo_juego and not fecha_sorteo_inicio and not fecha_sorteo_fin:
+        tablas_juego = {
+            "bingo": ["juego"],
+            "combinado": ["juego_binrifa"],
+            "rifa": ["juego_rifa"],
+            "super5": ["juego_bingo5"],
+            "super10": ["juego_bingo10"],
+            "animalitos": ["juego_bingo25"]
+        }
+        tabla = tablas_juego.get(tipo_juego.lower())
+        if tabla:
+            game_filter_sql = f" AND EXISTS (SELECT 1 FROM {tabla[0]} j WHERE j.id = det.id_juego)"
+
+    # CASO B: Filtro por fechas de sorteo (con o sin tipo de juego específico)
+    elif fecha_sorteo_inicio or fecha_sorteo_fin:
         conditions = []
-        
-        # Mapeo de tipos de juego a sus tablas
         tablas_juego = {
             "bingo": ["juego"],
             "combinado": ["juego_binrifa"],
@@ -371,11 +384,9 @@ def arqueo_caja(
             # Si no hay tipo pero sí fechas, busca en todas las tablas de juegos
             tablas_a_buscar = list(set().union(*tablas_juego.values()))
 
-        for tabla in tablas_a_buscar:
-            cond = f"EXISTS (SELECT 1 FROM {tabla} j WHERE j.id = det.id_juego"
+        for tbl in tablas_a_buscar:
+            cond = f"EXISTS (SELECT 1 FROM {tbl} j WHERE j.id = det.id_juego"
             
-            # ✅ CORRECCIÓN: Agregar filtro de fecha de sorteo SOLO si existe
-            # Pero la condición EXISTS debe agregarse SIEMPRE que haya tipo_juego
             if fecha_sorteo_inicio and fecha_sorteo_fin:
                 cond += " AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s"
             elif fecha_sorteo_inicio:
@@ -389,10 +400,9 @@ def arqueo_caja(
         if conditions:
             game_filter_sql = " AND (" + " OR ".join(conditions) + ")"
             
-            # Solo agregar params de sorteo si se usan en la condición
             if fecha_sorteo_inicio: params["fsi"] = fecha_sorteo_inicio
             if fecha_sorteo_fin: params["fsf"] = fecha_sorteo_fin
-            
+                        
     # 3. Filtros adicionales seguros con LIKE
     extra_filters = []
     
