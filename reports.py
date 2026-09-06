@@ -195,64 +195,66 @@ def arqueo_caja(
     # 2. Construcción dinámica del WHERE según el tipo de juego seleccionado
     game_filter_sql = ""
     
-    # Usamos %s para psycopg2
+    # Usamos %(nombre)s para parámetros nombrados de psycopg2
     if tipo_juego == "bingo":
         game_filter_sql = """
-            AND EXISTS (SELECT 1 FROM juego j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %s AND %s)
+            AND EXISTS (SELECT 1 FROM juego j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s)
         """
     elif tipo_juego == "combinado":
         game_filter_sql = """
-            AND EXISTS (SELECT 1 FROM juego_binrifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %s AND %s)
+            AND EXISTS (SELECT 1 FROM juego_binrifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s)
         """
     elif tipo_juego == "rifa":
         game_filter_sql = """
-            AND EXISTS (SELECT 1 FROM juego_rifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %s AND %s)
+            AND EXISTS (SELECT 1 FROM juego_rifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s)
         """
     elif not tipo_juego and (fecha_sorteo_inicio or fecha_sorteo_fin):
         game_filter_sql = """
             AND (
-                EXISTS (SELECT 1 FROM juego j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %s AND %s) OR
-                EXISTS (SELECT 1 FROM juego_binrifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %s AND %s) OR
-                EXISTS (SELECT 1 FROM juego_rifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %s AND %s)
+                EXISTS (SELECT 1 FROM juego j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s) OR
+                EXISTS (SELECT 1 FROM juego_binrifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s) OR
+                EXISTS (SELECT 1 FROM juego_rifa j WHERE j.id = ope.id_juego AND j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s)
             )
         """
 
-    # Preparar lista de parámetros en orden estricto para %s
-    params = []
+    # Preparar diccionario de parámetros nombrados
+    params = {}
     
-    # Agregar fechas de sorteo si existen (cada BETWEEN necesita 2 params)
+    # Agregar fechas de sorteo si existen
     if tipo_juego in ["bingo", "combinado", "rifa"]:
-        params.extend([fecha_sorteo_inicio, fecha_sorteo_fin])
+        params["fsi"] = fecha_sorteo_inicio
+        params["fsf"] = fecha_sorteo_fin
     elif not tipo_juego and (fecha_sorteo_inicio or fecha_sorteo_fin):
-        # Para el OR de todas las tablas, necesitamos 6 params (3 tablas x 2 fechas)
-        params.extend([fecha_sorteo_inicio, fecha_sorteo_fin] * 3)
+        # Para el OR de todas las tablas, necesitamos los mismos params
+        params["fsi"] = fecha_sorteo_inicio
+        params["fsf"] = fecha_sorteo_fin
 
     # Filtros LIKE adicionales
     like_clauses = []
     if tipo_valor:
-        like_clauses.append("UPPER(tva.denominacion) LIKE UPPER(%s)")
-        params.append(f"%{tipo_valor}%")
+        like_clauses.append("UPPER(tva.denominacion) LIKE UPPER(%(tv)s)")
+        params["tv"] = f"%{tipo_valor}%"
     if tipo_movimiento:
-        like_clauses.append("UPPER(det.tipo_movimiento) = UPPER(%s)")
-        params.append(tipo_movimiento)
+        like_clauses.append("UPPER(det.tipo_movimiento) = UPPER(%(tm)s)")
+        params["tm"] = tipo_movimiento
     if tipo_operacion:
-        like_clauses.append("UPPER(det.tipo_operacion) LIKE UPPER(%s)")
-        params.append(f"%{tipo_operacion}%")
+        like_clauses.append("UPPER(det.tipo_operacion) LIKE UPPER(%(to)s)")
+        params["to"] = f"%{tipo_operacion}%"
     if concepto:
-        like_clauses.append("UPPER(det.concepto) LIKE UPPER(%s)")
-        params.append(f"%{concepto}%")
+        like_clauses.append("UPPER(det.concepto) LIKE UPPER(%(con)s)")
+        params["con"] = f"%{concepto}%"
 
     extra_filters = " AND ".join(like_clauses)
     if extra_filters:
         extra_filters = f" AND {extra_filters}"
 
-    # 3. Consulta Base CORREGIDA
+    # 3. Consulta Base CORREGIDA con parámetros nombrados
     base_query = f"""
         SELECT 
             ROW_NUMBER() OVER (ORDER BY det.caja, det.fecha, det.hora, det.numero_tipo_movimiento, det.numero_tipo_operacion) AS item,
             det.*
         FROM (
-            -- BLOQUE 1: Ventas Directas (UNION de todos los juegos)
+            -- BLOQUE 1: Ventas Directas
             SELECT 
                 ope.id_caja, caj.numero_arqueo, caj.denominacion AS caja, 
                 ope.id_funcionario, COALESCE(pef.nombre || ' ' || pef.apellido, '') AS funcionario,
@@ -261,8 +263,8 @@ def arqueo_caja(
                 'Venta de cartón: Rendición' AS concepto, 'CONTADO VENTA' AS concepto_general,
                 per.id AS id_persona, COALESCE(per.nombre || ' ' || per.apellido, '') AS persona,
                 ope.numero_operacion, 
-                ope.fecha,      -- ✅ CORREGIDO: era cob.fecha
-                ope.hora,       -- ✅ CORREGIDO: era cob.hora
+                ope.fecha,      
+                ope.hora,       
                 tva.denominacion AS tipo_valor,
                 ope.tipo_juego || ' ' || to_char(ope.fecha_sorteo, 'DD/MM/YY') AS juego,
                 ope.monto
@@ -283,9 +285,9 @@ def arqueo_caja(
             LEFT JOIN persona per ON dis.id_persona = per.id
             LEFT JOIN tipo_detalle_subtipo tva ON ope.id_tipo_valor = tva.id
             WHERE ope.id_estado = 464 AND ope.id_tipo_valor = 450
-              AND ope.fecha BETWEEN %s AND %s   -- ✅ CORREGIDO: era cob.fecha
+              AND ope.fecha BETWEEN %(fi)s AND %(ff)s
               {game_filter_sql}
-              
+
             UNION ALL
 
             -- BLOQUE 2: Cobros
@@ -309,7 +311,7 @@ def arqueo_caja(
             LEFT JOIN persona per ON cob.id_persona = per.id
             LEFT JOIN credito_cobro cre ON cob.id_credito = cre.id
             WHERE cob.id_estado = 464
-              AND cob.fecha BETWEEN %s AND %s
+              AND cob.fecha BETWEEN %(fi)s AND %(ff)s
               {game_filter_sql}
 
             UNION ALL
@@ -335,7 +337,7 @@ def arqueo_caja(
             LEFT JOIN tipo_detalle_subtipo con ON pag.id_concepto = con.id
             LEFT JOIN credito_pago cre ON pag.id_credito = cre.id
             WHERE pag.id_estado = 489
-              AND pag.fecha BETWEEN %s AND %s
+              AND pag.fecha BETWEEN %(fi)s AND %(ff)s
               {game_filter_sql}
               
         ) AS det
@@ -343,17 +345,18 @@ def arqueo_caja(
         ORDER BY det.caja, det.fecha, det.hora, det.numero_tipo_movimiento, det.numero_tipo_operacion
     """
 
-    # Agregar parámetros obligatorios de fecha general (3 bloques x 2 fechas = 6 params al final)
-    params.extend([fecha_inicio, fecha_fin] * 3)
+    # Agregar parámetros obligatorios de fecha general
+    params["fi"] = fecha_inicio
+    params["ff"] = fecha_fin
 
-    # 4. Ejecución segura
+    # 4. Ejecución segura con parámetros nombrados
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Ejecutar con tupla de parámetros
-        cur.execute(base_query, tuple(params))
+        # Ejecutar con diccionario de parámetros nombrados
+        cur.execute(base_query, params)
         rows = cur.fetchall()
         cur.close()
         conn.close()
