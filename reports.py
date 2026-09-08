@@ -327,7 +327,7 @@ def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
         return {"error": str(e)}
     
 # ============================================
-# Endpoint 5: Arqueo Caja (TIPO JUEGO / FECHA SORTEO)
+# Endpoint 5: Arqueo Caja (Fecha Inicio y Fin / Caja / Tipo Valor / Tipo Juego / Fecha Sorteo Inicio y Fin / Tipo Movimiento / Tipo Operación / Concepto general)
 # ============================================
 @router.get("/arqueo-caja")
 def arqueo_caja(
@@ -525,6 +525,112 @@ def arqueo_caja(
         conn.close()
         
         # Limpieza de datos para JSON
+        result = []
+        for row in rows:
+            clean_row = {}
+            for k, v in dict(row).items():
+                if hasattr(v, '__float__'):
+                    clean_row[k] = float(v)
+                else:
+                    clean_row[k] = v
+            result.append(clean_row)
+            
+        return result
+        
+    except Exception as e:
+        if conn: conn.close()
+        return {"error": str(e)}
+    
+# ============================================
+# Endpoint 6: Estadística Venta (Fecha Inicio y Fin / Tipo Juego)
+# ============================================   
+@router.get("/estadistica-venta")
+def estadistica_venta(
+    fecha_sorteo_inicio: str = Query(..., description="Fecha inicio sorteo (YYYY-MM-DD)"),
+    fecha_sorteo_fin: str = Query(..., description="Fecha fin sorteo (YYYY-MM-DD)"),
+    tipo_juego: Optional[str] = Query(None, description="Filtrar por: bingo, combinado, rifa, super5, super10, animalitos")
+):
+    # 1. Validación de tipos de juego permitidos
+    tipos_validos = ["bingo", "combinado", "rifa", "super5", "super10", "animalitos"]
+    if tipo_juego and tipo_juego.lower() not in tipos_validos:
+        return {"error": f"tipo_juego debe ser uno de: {tipos_validos}"}
+
+    # 2. Construcción dinámica del UNION según el tipo de juego
+    union_queries = []
+    
+    # Mapeo de tipos a sus tablas y nombres
+    config_juegos = {
+        "bingo": ("operacion_bingo", "juego", "'Bingo'"),
+        "combinado": ("operacion_binrifa", "juego_binrifa", "'Combinado'"),
+        "rifa": ("operacion_rifa", "juego_rifa", "'Rifa'"),
+        "super5": ("operacion_bingo5", "juego_bingo5", "'Super 5'"),
+        "super10": ("operacion_bingo10", "juego_bingo10", "'Super 10'"),
+        "animalitos": ("operacion_bingo25", "juego_bingo25", "'Animalitos'")
+    }
+
+    juegos_a_consultar = [tipo_juego.lower()] if tipo_juego else list(config_juegos.keys())
+
+    for j_type in juegos_a_consultar:
+        if j_type in config_juegos:
+            op_table, jue_table, name_literal = config_juegos[j_type]
+            query_block = f"""
+                SELECT 
+                    ope.id_distribuidor, 
+                    {name_literal} AS juego, 
+                    ju.fecha_sorteo, 
+                    COALESCE(ret.cantidad, 0) AS retirado, 
+                    COALESCE(dev.cantidad, 0) AS devuelto, 
+                    ju.precio_carton, 
+                    ope.comision, 
+                    (COALESCE(ret.cantidad, 0.0) - COALESCE(dev.cantidad, 0.0)) * ope.comision AS monto_comision, 
+                    (COALESCE(ret.cantidad, 0.0) - COALESCE(dev.cantidad, 0.0)) * (ju.precio_carton - ope.comision) AS monto_a_rendir 
+                FROM {op_table} ope
+                LEFT JOIN {jue_table} ju ON ope.id_juego = ju.id
+                LEFT JOIN (SELECT id_operacion, COUNT(*) AS cantidad FROM {op_table}_detalle_retiro GROUP BY id_operacion) AS ret ON ret.id_operacion = ope.id
+                LEFT JOIN (SELECT id_operacion, COUNT(*) AS cantidad FROM {op_table}_detalle_devolucion GROUP BY id_operacion) AS dev ON dev.id_operacion = ope.id
+                WHERE ju.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
+                  AND ope.id_estado = 437 
+                  AND ope.rendido = true
+            """
+            union_queries.append(query_block)
+
+    if not union_queries:
+        return {"error": "Tipo de juego no reconocido"}
+
+    base_union = "\nUNION ALL\n".join(union_queries)
+
+    # 3. Consulta Principal con ROW_NUMBER particionado por fecha
+    final_query = f"""
+        SELECT 
+            sub.juego || ' ' || to_char(sub.fecha_sorteo, 'DD/MM/YYYY') AS juego,
+            sub.fecha_sorteo,
+            ROW_NUMBER() OVER (PARTITION BY sub.fecha_sorteo ORDER BY ped.nombre, ped.apellido) AS item,
+            ped.nombre || ' ' || ped.apellido AS distribuidor,
+            sub.retirado,
+            sub.devuelto,
+            sub.retirado - sub.devuelto AS vendido,
+            sub.precio_carton,
+            sub.comision,
+            sub.monto_comision,
+            sub.monto_a_rendir
+        FROM ({base_union}) AS sub
+        LEFT JOIN distribuidor di ON sub.id_distribuidor = di.id
+        LEFT JOIN persona ped ON di.id_persona = ped.id
+        ORDER BY sub.fecha_sorteo, sub.juego, ped.nombre, ped.apellido
+    """
+
+    params = {"fsi": fecha_sorteo_inicio, "fsf": fecha_sorteo_fin}
+
+    # 4. Ejecución
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(final_query, params)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
         result = []
         for row in rows:
             clean_row = {}
