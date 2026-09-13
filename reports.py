@@ -244,7 +244,7 @@ def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
                 WHERE id_estado = 464 AND id_tipo_valor = 454 
                 GROUP BY id_operacion
             ) AS cobot ON cobot.id_operacion = ope.id 
-            WHERE ope.id_juego = %s 
+            WHERE ope.id_juego = (SELECT id FROM juego_rifa WHERE fecha_sorteo = %s) 
               AND ope.id_estado = 437 
             ORDER BY ped.nombre, ped.apellido
         """
