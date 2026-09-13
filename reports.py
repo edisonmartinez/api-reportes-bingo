@@ -674,36 +674,39 @@ def creditos_pendientes(
         return {"error": f"tipo_juego debe ser uno de: {tipos_validos}"}
 
     # Construcción de filtros dinámicos
-    filtros_adicionales = []
+    where_filtrs = []  # Para el WHERE (antes del GROUP BY)
+    having_filtrs = [] # Para el HAVING (después del GROUP BY)
     params = {}
 
+    # 1. Filtros para el WHERE (columnas individuales)
     if fecha_credito_inicio:
-        filtros_adicionales.append("cre.fecha >= %(fecha_credito_inicio)s")
+        where_filtrs.append("cre.fecha >= %(fecha_credito_inicio)s")
         params["fecha_credito_inicio"] = fecha_credito_inicio
 
     if fecha_credito_fin:
-        filtros_adicionales.append("cre.fecha <= %(fecha_credito_fin)s")
+        where_filtrs.append("cre.fecha <= %(fecha_credito_fin)s")
         params["fecha_credito_fin"] = fecha_credito_fin
 
     if monto_credito_min is not None:
-        filtros_adicionales.append("cre.monto >= %(monto_credito_min)s")
+        where_filtrs.append("cre.monto >= %(monto_credito_min)s")
         params["monto_credito_min"] = monto_credito_min
 
     if monto_credito_max is not None:
-        filtros_adicionales.append("cre.monto <= %(monto_credito_max)s")
+        where_filtrs.append("cre.monto <= %(monto_credito_max)s")
         params["monto_credito_max"] = monto_credito_max
 
+    if persona:
+        where_filtrs.append("(per.cedula::text LIKE %(persona_busqueda)s OR per.nombre || ' ' || per.apellido ILIKE %(persona_busqueda)s)")
+        params["persona_busqueda"] = f"%{persona}%"
+
+    # 2. Filtros para el HAVING (funciones de agregación)
     if saldo_credito_min is not None:
-        filtros_adicionales.append("COALESCE(SUM(det.monto-det.cobro),0.000) >= %(saldo_credito_min)s")
+        having_filtrs.append("COALESCE(SUM(det.monto-det.cobro),0.000) >= %(saldo_credito_min)s")
         params["saldo_credito_min"] = saldo_credito_min
 
     if saldo_credito_max is not None:
-        filtros_adicionales.append("COALESCE(SUM(det.monto-det.cobro),0.000) <= %(saldo_credito_max)s")
+        having_filtrs.append("COALESCE(SUM(det.monto-det.cobro),0.000) <= %(saldo_credito_max)s")
         params["saldo_credito_max"] = saldo_credito_max
-
-    if persona:
-        filtros_adicionales.append("(per.cedula::text LIKE %(persona_busqueda)s OR per.nombre || ' ' || per.apellido ILIKE %(persona_busqueda)s)")
-        params["persona_busqueda"] = f"%{persona}%"
 
     # Mapeo de tipos de juego a sus tablas y filtros
     config_juegos = {
@@ -921,13 +924,19 @@ def creditos_pendientes(
                 """
             
             # Agregar filtros adicionales si existen
-            if filtros_adicionales:
-                bloque_sql += " AND " + " AND ".join(filtros_adicionales)
+            # Agregar WHERE si hay filtros
+            if where_filtrs:
+                bloque_sql += " AND " + " AND ".join(where_filtrs)
             
+            # Agregar GROUP BY (siempre va)
             bloque_sql += " GROUP BY tju.denominacion, cre.numero_credito, jue.fecha_sorteo, jue.serie, cre.fecha, cre.monto, per.cedula, per.nombre, per.apellido, tva.denominacion, cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro"
             
-            union_blocks.append(bloque_sql)
-
+            # Agregar HAVING si hay filtros de saldo
+            if having_filtrs:
+                bloque_sql += " HAVING " + " AND ".join(having_filtrs)
+            
+            union_blocks.append(bloque_sql)            
+            
     if not union_blocks:
         return {"error": "No se especificaron bloques válidos"}
 
