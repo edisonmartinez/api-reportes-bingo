@@ -1,11 +1,38 @@
-from fastapi import APIRouter, Query, HTTPException
+
+#from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, Depends, HTTPException, status # nueva línea 13/09/26
+from fastapi.security import APIKeyHeader # nueva línea 13/09/2026
 from fastapi.responses import JSONResponse
 from typing import Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import os
 
-router = APIRouter(prefix="/api/reportes", tags=["Reportes"])
+# ======================== nuevo bloque 13-09/2026
+# Leer la clave secreta desde las variables de entorno de Render
+API_KEY_SECRET = os.getenv("API_KEY_SECRET")
+
+# Definir el nombre del header que el dashboard deberá enviar
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verificar_api_key(api_key: str = Depends(api_key_header)):
+    if not API_KEY_SECRET:
+        raise HTTPException(status_code=500, detail="API Key no configurada en el servidor")
+    
+    if api_key != API_KEY_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Acceso denegado: API Key inválida o faltante"
+        )
+    return api_key
+# ======================== nuevo bloque 13-09/2026
+
+#router = APIRouter(prefix="/api/reportes", tags=["Reportes"])
+router = APIRouter(
+    prefix="/api/reportes", 
+    tags=["Reportes"],
+    dependencies=[Depends(verificar_api_key)]  # <--- ESTO PROTEGE TODO EL ARCHIVO
+) # nueva línea 13-09-2026
 
 def get_db_connection():
     """Crear conexión a PostgreSQL"""
@@ -44,136 +71,8 @@ def test_conexion():
             conn.close()
         return {"status": "FALLO", "error": str(e)}
 
-# ============================================
-# Endpoint 2: Persona por ID
-# ============================================
-@router.get("/persona/{persona_id}")
-def obtener_persona(persona_id: int):
-    """Obtener nombre y apellido de una persona"""
-    conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT nombre, apellido FROM persona WHERE id = %s", (persona_id,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        
-        if not row:
-            return {"error": "Persona no encontrada"}
-        
-        return {"nombre": row['nombre'], "apellido": row['apellido']}
-    except Exception as e:
-        if conn:
-            conn.close()
-        return {"error": str(e)}
-
-# ============================================
-# Endpoint 3: ListadoRendicion (FECHA SORTEO)
-# ============================================
-@router.get("/listado-rendicion/{fecha_sorteo}")
-def listado_rendicion(fecha_sorteo: str):
-    """Reporte de rendición de operaciones por juego"""
-    conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        query = """
-            SELECT 
-                ope.numero_operacion, 
-                ped.nombre || ' ' || ped.apellido AS distribuidor, 
-                CASE WHEN ope.rendido=true THEN 'SI' ELSE 'NO' END AS rendido, 
-                COALESCE(ret.cantidad,0) AS retirado, 
-                COALESCE(dev.cantidad,0) AS devuelto, 
-                CASE 
-                    WHEN ope.rendido=true THEN COALESCE(ret.cantidad,0) - COALESCE(dev.cantidad,0) 
-                    ELSE 0 
-                END AS vendido, 
-                ju.precio_carton, 
-                ope.comision, 
-                (COALESCE(ret.cantidad,0.0) - COALESCE(dev.cantidad,0.0)) * ope.comision AS monto_comision, 
-                (COALESCE(ret.cantidad,0.0) - COALESCE(dev.cantidad,0.0)) * (ju.precio_carton - ope.comision) AS monto_a_rendir, 
-                COALESCE(cobef.monto,0.0) AS monto_efectivo, 
-                COALESCE(cobcr.monto,0.0) AS monto_credito, 
-                COALESCE(cobgi.monto,0.0) AS monto_telefonia, 
-                COALESCE(cobot.monto,0.0) AS monto_otro 
-            FROM operacion_bingo ope 
-            LEFT JOIN juego ju ON ope.id_juego = ju.id 
-            LEFT JOIN distribuidor di ON ope.id_distribuidor = di.id 
-            LEFT JOIN persona ped ON di.id_persona = ped.id 
-            LEFT JOIN (
-                SELECT id_operacion, COUNT(*) AS cantidad 
-                FROM operacion_bingo_detalle_retiro 
-                GROUP BY id_operacion
-            ) AS ret ON ret.id_operacion = ope.id 
-            LEFT JOIN (
-                SELECT id_operacion, COUNT(*) AS cantidad 
-                FROM operacion_bingo_detalle_devolucion 
-                GROUP BY id_operacion
-            ) AS dev ON dev.id_operacion = ope.id 
-            LEFT JOIN (
-                SELECT id_operacion, SUM(monto) AS monto 
-                FROM operacion_bingo_detalle_cobro 
-                WHERE id_estado=464 AND id_tipo_valor=450 
-                GROUP BY id_operacion
-            ) AS cobef ON cobef.id_operacion = ope.id 
-            LEFT JOIN (
-                SELECT id_operacion, SUM(monto) AS monto 
-                FROM operacion_bingo_detalle_cobro 
-                WHERE id_estado=464 AND id_tipo_valor=456 
-                GROUP BY id_operacion
-            ) AS cobcr ON cobcr.id_operacion = ope.id 
-            LEFT JOIN (
-                SELECT id_operacion, SUM(monto) AS monto 
-                FROM operacion_bingo_detalle_cobro 
-                WHERE id_estado=464 AND id_tipo_valor=455 
-                GROUP BY id_operacion
-            ) AS cobgi ON cobgi.id_operacion = ope.id 
-            LEFT JOIN (
-                SELECT id_operacion, SUM(monto) AS monto 
-                FROM operacion_bingo_detalle_cobro 
-                WHERE id_estado=464 AND id_tipo_valor=454 
-                GROUP BY id_operacion
-            ) AS cobot ON cobot.id_operacion = ope.id 
-            WHERE ope.id_juego = (SELECT id FROM juego WHERE fecha_sorteo = %s) AND ope.id_estado = 437 
-            ORDER BY ped.nombre, ped.apellido
-        """
-        
-        cur.execute(query, (fecha_sorteo,))
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        # Convertir Decimal a float para JSON
-        reportes = []
-        for row in rows:
-            reportes.append({
-                "numero_operacion": row['numero_operacion'],
-                "distribuidor": row['distribuidor'],
-                "rendido": row['rendido'],
-                "retirado": row['retirado'],
-                "devuelto": row['devuelto'],
-                "vendido": row['vendido'],
-                "precio_carton": float(row['precio_carton']) if row['precio_carton'] else None,
-                "comision": float(row['comision']) if row['comision'] else None,
-                "monto_comision": float(row['monto_comision']) if row['monto_comision'] else None,
-                "monto_a_rendir": float(row['monto_a_rendir']) if row['monto_a_rendir'] else None,
-                "monto_efectivo": float(row['monto_efectivo']) if row['monto_efectivo'] else None,
-                "monto_credito": float(row['monto_credito']) if row['monto_credito'] else None,
-                "monto_telefonia": float(row['monto_telefonia']) if row['monto_telefonia'] else None,
-                "monto_otro": float(row['monto_otro']) if row['monto_otro'] else None
-            })
-        
-        return reportes
-        
-    except Exception as e:
-        if conn:
-            conn.close()
-        return {"error": str(e)}
-
 # ========================================================
-# Endpoint 4: ListadoRendicion (TIPO JUEGO / FECHA SORTEO)
+# Endpoint 2: ListadoRendicion (TIPO JUEGO / FECHA SORTEO)
 # ========================================================
 @router.get("/listado-rendicion/{tipo_juego}/{fecha_sorteo}")
 def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
@@ -327,7 +226,7 @@ def listado_rendicion(tipo_juego: str, fecha_sorteo: str):
         return {"error": str(e)}
     
 # ============================================
-# Endpoint 5: Arqueo Caja (Fecha Inicio y Fin / Caja / Tipo Valor / Tipo Juego / Fecha Sorteo Inicio y Fin / Tipo Movimiento / Tipo Operación / Concepto general)
+# Endpoint 3: Arqueo Caja (Fecha Inicio y Fin / Caja / Tipo Valor / Tipo Juego / Fecha Sorteo Inicio y Fin / Tipo Movimiento / Tipo Operación / Concepto general)
 # ============================================
 @router.get("/arqueo-caja")
 def arqueo_caja(
@@ -542,7 +441,7 @@ def arqueo_caja(
         return {"error": str(e)}
     
 # ============================================
-# Endpoint 6: Estadística Venta (Fecha Inicio y Fin / Tipo Juego)
+# Endpoint 4: Estadística Venta (Fecha Inicio y Fin / Tipo Juego)
 # ============================================   
 @router.get("/estadistica-venta")
 def estadistica_venta(
@@ -655,7 +554,7 @@ def estadistica_venta(
         return {"error": str(e)}
     
 # ============================================
-# Endpoint 7: Créditos Pendientes (fecha credito, monto credito, saldo pendiente, persona, tipo juego)
+# Endpoint 5: Créditos Pendientes (fecha credito, monto credito, saldo pendiente, persona, tipo juego)
 # ============================================   
 @router.get("/creditos-pendientes")
 def creditos_pendientes(
