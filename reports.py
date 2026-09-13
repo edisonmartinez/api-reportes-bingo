@@ -941,3 +941,136 @@ def creditos_pendientes(
         if conn:
             conn.close()
         return {"error": str(e)}
+
+# ========================================================
+# Endpoint 6: ListadoRendicionGeneral (RANGO FECHA SORTEO)
+# ========================================================
+@router.get("/listado-rendicion-general")
+def listado_rendicion_general(
+    fecha_sorteo_inicio: str = Query(..., description="Fecha inicio sorteo (YYYY-MM-DD)"),
+    fecha_sorteo_fin: str = Query(..., description="Fecha fin sorteo (YYYY-MM-DD)")
+):
+    query = """
+        SELECT 
+            'BINGO' AS tipo_juego,
+            ope.numero_operacion,
+            ped.nombre || ' ' || ped.apellido AS distribuidor,
+            CASE WHEN ope.rendido = true THEN 'SI' ELSE 'NO' END AS rendido,
+            COALESCE(ret.cantidad, 0) AS retirado,
+            COALESCE(dev.cantidad, 0) AS devuelto,
+            CASE WHEN ope.rendido = true THEN COALESCE(ret.cantidad, 0) - COALESCE(dev.cantidad, 0) ELSE 0 END AS vendido,
+            ju.precio_carton,
+            ope.comision,
+            (COALESCE(ret.cantidad, 0.0) - COALESCE(dev.cantidad, 0.0)) * ope.comision AS monto_comision,
+            (COALESCE(ret.cantidad, 0.0) - COALESCE(dev.cantidad, 0.0)) * (ju.precio_carton - ope.comision) AS monto_a_rendir,
+            COALESCE(cobef.monto, 0.0) AS monto_efectivo,
+            COALESCE(cobcr.monto, 0.0) AS monto_credito,
+            COALESCE(cobgi.monto, 0.0) AS monto_telefonia,
+            COALESCE(cobot.monto, 0.0) AS monto_otro,
+            ju.fecha_sorteo,
+            ju.serie
+        FROM operacion_bingo ope
+        LEFT JOIN juego ju ON ope.id_juego = ju.id
+        LEFT JOIN distribuidor di ON ope.id_distribuidor = di.id
+        LEFT JOIN persona ped ON di.id_persona = ped.id
+        LEFT JOIN (SELECT id_operacion, COUNT(*) AS cantidad FROM operacion_bingo_detalle_retiro GROUP BY id_operacion) AS ret ON ret.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, COUNT(*) AS cantidad FROM operacion_bingo_detalle_devolucion GROUP BY id_operacion) AS dev ON dev.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_bingo_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 450 GROUP BY id_operacion) AS cobef ON cobef.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_bingo_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 456 GROUP BY id_operacion) AS cobcr ON cobcr.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_bingo_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 455 GROUP BY id_operacion) AS cobgi ON cobgi.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_bingo_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 454 GROUP BY id_operacion) AS cobot ON cobot.id_operacion = ope.id
+        WHERE ju.fecha_sorteo BETWEEN %(fi)s AND %(ff)s AND ope.id_estado = 437
+        
+        UNION ALL
+        
+        SELECT 
+            'COMBINADO' AS tipo_juego,
+            ope.numero_operacion,
+            ped.nombre || ' ' || ped.apellido AS distribuidor,
+            CASE WHEN ope.rendido = true THEN 'SI' ELSE 'NO' END AS rendido,
+            COALESCE(ret.cantidad, 0) AS retirado,
+            COALESCE(dev.cantidad, 0) AS devuelto,
+            CASE WHEN ope.rendido = true THEN COALESCE(ret.cantidad, 0) - COALESCE(dev.cantidad, 0) ELSE 0 END AS vendido,
+            ju.precio_carton,
+            ope.comision,
+            (COALESCE(ret.cantidad, 0.0) - COALESCE(dev.cantidad, 0.0)) * ope.comision AS monto_comision,
+            (COALESCE(ret.cantidad, 0.0) - COALESCE(dev.cantidad, 0.0)) * (ju.precio_carton - ope.comision) AS monto_a_rendir,
+            COALESCE(cobef.monto, 0.0) AS monto_efectivo,
+            COALESCE(cobcr.monto, 0.0) AS monto_credito,
+            COALESCE(cobgi.monto, 0.0) AS monto_telefonia,
+            COALESCE(cobot.monto, 0.0) AS monto_otro,
+            ju.fecha_sorteo,
+            ju.serie
+        FROM operacion_binrifa ope
+        LEFT JOIN juego_binrifa ju ON ope.id_juego = ju.id
+        LEFT JOIN distribuidor di ON ope.id_distribuidor = di.id
+        LEFT JOIN persona ped ON di.id_persona = ped.id
+        LEFT JOIN (SELECT id_operacion, COUNT(*) AS cantidad FROM operacion_binrifa_detalle_retiro GROUP BY id_operacion) AS ret ON ret.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, COUNT(*) AS cantidad FROM operacion_binrifa_detalle_devolucion GROUP BY id_operacion) AS dev ON dev.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_binrifa_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 450 GROUP BY id_operacion) AS cobef ON cobef.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_binrifa_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 456 GROUP BY id_operacion) AS cobcr ON cobcr.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_binrifa_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 455 GROUP BY id_operacion) AS cobgi ON cobgi.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_binrifa_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 454 GROUP BY id_operacion) AS cobot ON cobot.id_operacion = ope.id
+        WHERE ju.fecha_sorteo BETWEEN %(fi)s AND %(ff)s AND ope.id_estado = 437
+        
+        UNION ALL
+        
+        SELECT 
+            'RIFA' AS tipo_juego,
+            ope.numero_operacion,
+            ped.nombre || ' ' || ped.apellido AS distribuidor,
+            CASE WHEN ope.rendido = true THEN 'SI' ELSE 'NO' END AS rendido,
+            COALESCE(ret.cantidad, 0) AS retirado,
+            COALESCE(dev.cantidad, 0) AS devuelto,
+            CASE WHEN ope.rendido = true THEN COALESCE(ret.cantidad, 0) - COALESCE(dev.cantidad, 0) ELSE 0 END AS vendido,
+            ju.precio_carton,
+            ope.comision,
+            (COALESCE(ret.cantidad, 0.0) - COALESCE(dev.cantidad, 0.0)) * ope.comision AS monto_comision,
+            (COALESCE(ret.cantidad, 0.0) - COALESCE(dev.cantidad, 0.0)) * (ju.precio_carton - ope.comision) AS monto_a_rendir,
+            COALESCE(cobef.monto, 0.0) AS monto_efectivo,
+            COALESCE(cobcr.monto, 0.0) AS monto_credito,
+            COALESCE(cobgi.monto, 0.0) AS monto_telefonia,
+            COALESCE(cobot.monto, 0.0) AS monto_otro,
+            ju.fecha_sorteo,
+            ju.serie
+        FROM operacion_rifa ope
+        LEFT JOIN juego_rifa ju ON ope.id_juego = ju.id
+        LEFT JOIN distribuidor di ON ope.id_distribuidor = di.id
+        LEFT JOIN persona ped ON di.id_persona = ped.id
+        LEFT JOIN (SELECT id_operacion, COUNT(*) AS cantidad FROM operacion_rifa_detalle_retiro GROUP BY id_operacion) AS ret ON ret.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, COUNT(*) AS cantidad FROM operacion_rifa_detalle_devolucion GROUP BY id_operacion) AS dev ON dev.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_rifa_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 450 GROUP BY id_operacion) AS cobef ON cobef.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_rifa_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 456 GROUP BY id_operacion) AS cobcr ON cobcr.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_rifa_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 455 GROUP BY id_operacion) AS cobgi ON cobgi.id_operacion = ope.id
+        LEFT JOIN (SELECT id_operacion, SUM(monto) AS monto FROM operacion_rifa_detalle_cobro WHERE id_estado = 464 AND id_tipo_valor = 454 GROUP BY id_operacion) AS cobot ON cobot.id_operacion = ope.id
+        WHERE ju.fecha_sorteo BETWEEN %(fi)s AND %(ff)s AND ope.id_estado = 437
+        
+        ORDER BY fecha_sorteo, tipo_juego, distribuidor, numero_operacion
+    """
+    
+    params = {"fi": fecha_sorteo_inicio, "ff": fecha_sorteo_fin}
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        result = []
+        for row in rows:
+            clean_row = {}
+            for k, v in dict(row).items():
+                if hasattr(v, '__float__'):
+                    clean_row[k] = float(v)
+                else:
+                    clean_row[k] = v
+            result.append(clean_row)
+            
+        return result
+        
+    except Exception as e:
+        if conn: conn.close()
+        return {"error": str(e)}
