@@ -617,10 +617,10 @@ def estadistica_venta(
         return {"error": str(e)}
     
 # ============================================
-# Endpoint 5: Créditos Pendientes (fecha credito, monto credito, saldo pendiente, persona, tipo juego)
+# Endpoint 5: Créditos (fecha credito, monto credito, saldo pendiente, persona, tipo juego)
 # ============================================   
-@router.get("/creditos-pendientes")
-def creditos_pendientes(
+@router.get("/creditos")
+def creditos(
     fecha_credito_inicio: Optional[str] = Query(None, description="Fecha inicio crédito (YYYY-MM-DD)"),
     fecha_credito_fin: Optional[str] = Query(None, description="Fecha fin crédito (YYYY-MM-DD)"),
     monto_credito_min: Optional[float] = Query(None, description="Monto mínimo del crédito"),
@@ -628,12 +628,19 @@ def creditos_pendientes(
     saldo_credito_min: Optional[float] = Query(None, description="Saldo mínimo pendiente"),
     saldo_credito_max: Optional[float] = Query(None, description="Saldo máximo pendiente"),
     persona: Optional[str] = Query(None, description="Buscar por nombre o cédula"),
-    tipo_juego: Optional[str] = Query(None, description="Filtrar por tipo: credito, bingo, rifa, combinado, super5, super10, animalitos")
+    tipo_juego: Optional[str] = Query(None, description="Filtrar por tipo: credito, bingo, rifa, combinado, super5, super10, animalitos"),
+    estado: str = Query("pendiente", description="Estado: pendiente, saldao, todos")  # NUEVO PARÁMETRO
 ):
+
     # Validación de tipos de juego
     tipos_validos = ["credito", "bingo", "rifa", "combinado", "super5", "super10", "animalitos"]
     if tipo_juego and tipo_juego.lower() not in tipos_validos:
         return {"error": f"tipo_juego debe ser uno de: {tipos_validos}"}
+
+    # Validación de estado
+    estados_validos = ["pendiente", "saldado", "todos"]
+    if estado.lower() not in estados_validos:
+        return {"error": f"estado debe ser uno de: {estados_validos}"}
 
     # Construcción de filtros dinámicos
     where_filtrs = []  # Para el WHERE (antes del GROUP BY)
@@ -905,12 +912,20 @@ def creditos_pendientes(
     base_union = "\nUNION\n".join(union_blocks)
 
     # Consulta final con numeración
+    
+    filtro_saldo = ""
+    if estado.lower() == "pendiente":
+        filtro_saldo = "WHERE saldo_credito > 0"
+    elif estado.lower() == "saldado":
+        filtro_saldo = "WHERE saldo_credito = 0"
+    # Si es "todos", no agrega filtro    
+    
     final_query = f"""
         SELECT ROW_NUMBER() OVER (ORDER BY orden, numero_credito, fecha_sorteo, cedula, persona, fecha_credito) AS item, * 
         FROM ( 
             {base_union}
         ) AS res 
-        WHERE saldo_credito>0
+        {filtro_saldo}
         ORDER BY orden, fecha_sorteo, numero_credito, cedula, persona, fecha_credito
     """
 
