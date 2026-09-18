@@ -629,46 +629,55 @@ def creditos(
     saldo_credito_max: Optional[float] = Query(None, description="Saldo máximo pendiente"),
     persona: Optional[str] = Query(None, description="Buscar por nombre o cédula"),
     tipo_juego: Optional[str] = Query(None, description="Filtrar por tipo: credito, bingo, rifa, combinado, super5, super10, animalitos"),
-    estado: str = Query("pendiente", description="Estado: pendiente, saldado, todos")
+    estado: str = Query("pendiente", description="Estado: pendiente, saldao, todos")  # NUEVO PARÁMETRO
 ):
-    # 1. Validaciones
+
+    # Validación de tipos de juego
     tipos_validos = ["credito", "bingo", "rifa", "combinado", "super5", "super10", "animalitos"]
     if tipo_juego and tipo_juego.lower() not in tipos_validos:
         return {"error": f"tipo_juego debe ser uno de: {tipos_validos}"}
 
+    # Validación de estado
     estados_validos = ["pendiente", "saldado", "todos"]
     if estado.lower() not in estados_validos:
         return {"error": f"estado debe ser uno de: {estados_validos}"}
 
-    where_filtrs = []
-    having_filtrs = []
+    # Construcción de filtros dinámicos
+    where_filtrs = []  # Para el WHERE (antes del GROUP BY)
+    having_filtrs = [] # Para el HAVING (después del GROUP BY)
     params = {}
 
-    # 2. Filtros WHERE
+    # 1. Filtros para el WHERE (columnas individuales)
     if fecha_credito_inicio:
         where_filtrs.append("cre.fecha >= %(fecha_credito_inicio)s")
         params["fecha_credito_inicio"] = fecha_credito_inicio
+
     if fecha_credito_fin:
         where_filtrs.append("cre.fecha <= %(fecha_credito_fin)s")
         params["fecha_credito_fin"] = fecha_credito_fin
+
     if monto_credito_min is not None:
         where_filtrs.append("cre.monto >= %(monto_credito_min)s")
         params["monto_credito_min"] = monto_credito_min
+
     if monto_credito_max is not None:
         where_filtrs.append("cre.monto <= %(monto_credito_max)s")
         params["monto_credito_max"] = monto_credito_max
+
     if persona:
         where_filtrs.append("(per.cedula::text LIKE %(persona_busqueda)s OR per.nombre || ' ' || per.apellido ILIKE %(persona_busqueda)s)")
         params["persona_busqueda"] = f"%{persona}%"
 
-    # 3. Filtros HAVING (CORREGIDO: SUMA separada para evitar NULLs)
+    # 2. Filtros para el HAVING (funciones de agregación)
     if saldo_credito_min is not None:
-        having_filtrs.append("(COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) >= %(saldo_credito_min)s")
+        having_filtrs.append("COALESCE(SUM(det.monto-det.cobro),0.000) >= %(saldo_credito_min)s")
         params["saldo_credito_min"] = saldo_credito_min
+
     if saldo_credito_max is not None:
-        having_filtrs.append("(COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) <= %(saldo_credito_max)s")
+        having_filtrs.append("COALESCE(SUM(det.monto-det.cobro),0.000) <= %(saldo_credito_max)s")
         params["saldo_credito_max"] = saldo_credito_max
 
+    # Mapeo de tipos de juego a sus tablas y filtros
     config_juegos = {
         "credito": ("jue.fecha_sorteo IS NULL", None, None),
         "bingo": ("cre.id_tipo_juego=430", "juego", "juego"),
@@ -679,14 +688,21 @@ def creditos(
         "animalitos": ("cre.id_tipo_juego=480", "juego_bingo25", "animalitos")
     }
 
-    bloques_a_incluir = [tipo_juego.lower()] if tipo_juego else list(config_juegos.keys())
+    # Determinar qué bloques incluir
+    if tipo_juego:
+        bloques_a_incluir = [tipo_juego.lower()]
+    else:
+        bloques_a_incluir = list(config_juegos.keys())
+
     union_blocks = []
 
     for bloque in bloques_a_incluir:
         if bloque in config_juegos:
             condicion_tipo, tabla_juego, nombre_grupo = config_juegos[bloque]
             
+            # Determinar tabla de juego y detalles según el tipo
             if bloque == "credito":
+                tabla_juego_sql = "juego jue"
                 bloque_sql = f"""
                     SELECT '0' AS orden, 'CREDITO' AS grupo, cre.numero_credito, 
                     jue.fecha_sorteo, 
@@ -694,8 +710,8 @@ def creditos(
                     cre.fecha AS fecha_credito, cre.monto AS monto_credito, 
                     per.cedula, per.nombre||' '||per.apellido AS persona, 
                     tva.denominacion AS tipo_valor, 
-                    COALESCE(SUM(det.cobro), 0.000) AS cobro_credito, 
-                    (COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) AS saldo_credito, 
+                    COALESCE(SUM(det.cobro),0.000) AS cobro_credito, 
+                    COALESCE(SUM(det.monto-det.cobro),0.000) AS saldo_credito, 
                     cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro 
                     FROM credito_cobro cre 
                     LEFT JOIN persona per ON cre.id_persona = per.id 
@@ -705,7 +721,12 @@ def creditos(
                     LEFT JOIN credito_cobro_detalle det ON det.id_credito = cre.id 
                     LEFT JOIN (SELECT * FROM operacion_bingo_detalle_cobro WHERE id_estado=464) detcob ON cre.id_operacion = detcob.id 
                     LEFT JOIN tipo_detalle_subtipo tva ON detcob.id_tipo_valor = tva.id 
-                    LEFT JOIN (SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro FROM cobro AS cob LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro WHERE cob.id_estado=464) cob ON cre.id = cob.id_credito 
+                    LEFT JOIN (
+                        SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro 
+                        FROM cobro AS cob 
+                        LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro 
+                        WHERE cob.id_estado=464
+                    ) cob ON cre.id = cob.id_credito 
                     WHERE cre.id_estado=471 AND jue.fecha_sorteo IS NULL
                 """
             elif bloque == "bingo":
@@ -716,8 +737,8 @@ def creditos(
                     cre.fecha AS fecha_credito, cre.monto AS monto_credito, 
                     per.cedula, per.nombre||' '||per.apellido AS persona, 
                     tva.denominacion AS tipo_valor, 
-                    COALESCE(SUM(det.cobro), 0.000) AS cobro_credito, 
-                    (COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) AS saldo_credito, 
+                    COALESCE(SUM(det.cobro),0.000) AS cobro_credito, 
+                    COALESCE(SUM(det.monto-det.cobro),0.000) AS saldo_credito, 
                     cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro 
                     FROM credito_cobro cre 
                     LEFT JOIN persona per ON cre.id_persona = per.id 
@@ -727,7 +748,12 @@ def creditos(
                     LEFT JOIN credito_cobro_detalle det ON det.id_credito = cre.id 
                     LEFT JOIN (SELECT * FROM operacion_bingo_detalle_cobro WHERE id_estado=464) detcob ON cre.id_operacion = detcob.id 
                     LEFT JOIN tipo_detalle_subtipo tva ON detcob.id_tipo_valor = tva.id 
-                    LEFT JOIN (SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro FROM cobro AS cob LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro WHERE cob.id_estado=464) cob ON cre.id = cob.id_credito 
+                    LEFT JOIN (
+                        SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro 
+                        FROM cobro AS cob 
+                        LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro 
+                        WHERE cob.id_estado=464
+                    ) cob ON cre.id = cob.id_credito 
                     WHERE cre.id_estado=471 AND cre.id_tipo_juego=430
                 """
             elif bloque == "rifa":
@@ -738,8 +764,8 @@ def creditos(
                     cre.fecha AS fecha_credito, cre.monto AS monto_credito, 
                     per.cedula, per.nombre||' '||per.apellido AS persona, 
                     tva.denominacion AS tipo_valor, 
-                    COALESCE(SUM(det.cobro), 0.000) AS cobro_credito, 
-                    (COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) AS saldo_credito, 
+                    COALESCE(SUM(det.cobro),0.000) AS cobro_credito, 
+                    COALESCE(SUM(det.monto-det.cobro),0.000) AS saldo_credito, 
                     cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro 
                     FROM credito_cobro cre 
                     LEFT JOIN persona per ON cre.id_persona = per.id 
@@ -749,7 +775,12 @@ def creditos(
                     LEFT JOIN credito_cobro_detalle det ON det.id_credito = cre.id 
                     LEFT JOIN (SELECT * FROM operacion_rifa_detalle_cobro WHERE id_estado=464) detcob ON cre.id_operacion = detcob.id 
                     LEFT JOIN tipo_detalle_subtipo tva ON detcob.id_tipo_valor = tva.id 
-                    LEFT JOIN (SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro FROM cobro AS cob LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro WHERE cob.id_estado=464) cob ON cre.id = cob.id_credito 
+                    LEFT JOIN (
+                        SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro 
+                        FROM cobro AS cob 
+                        LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro 
+                        WHERE cob.id_estado=464
+                    ) cob ON cre.id = cob.id_credito 
                     WHERE cre.id_estado=471 AND cre.id_tipo_juego=429
                 """
             elif bloque == "combinado":
@@ -760,8 +791,8 @@ def creditos(
                     cre.fecha AS fecha_credito, cre.monto AS monto_credito, 
                     per.cedula, per.nombre||' '||per.apellido AS persona, 
                     tva.denominacion AS tipo_valor, 
-                    COALESCE(SUM(det.cobro), 0.000) AS cobro_credito, 
-                    (COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) AS saldo_credito, 
+                    COALESCE(SUM(det.cobro),0.000) AS cobro_credito, 
+                    COALESCE(SUM(det.monto-det.cobro),0.000) AS saldo_credito, 
                     cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro 
                     FROM credito_cobro cre 
                     LEFT JOIN persona per ON cre.id_persona = per.id 
@@ -771,7 +802,12 @@ def creditos(
                     LEFT JOIN credito_cobro_detalle det ON det.id_credito = cre.id 
                     LEFT JOIN (SELECT * FROM operacion_binrifa_detalle_cobro WHERE id_estado=464) detcob ON cre.id_operacion = detcob.id 
                     LEFT JOIN tipo_detalle_subtipo tva ON detcob.id_tipo_valor = tva.id 
-                    LEFT JOIN (SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro FROM cobro AS cob LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro WHERE cob.id_estado=464) cob ON cre.id = cob.id_credito 
+                    LEFT JOIN (
+                        SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro 
+                        FROM cobro AS cob 
+                        LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro 
+                        WHERE cob.id_estado=464
+                    ) cob ON cre.id = cob.id_credito 
                     WHERE cre.id_estado=471 AND cre.id_tipo_juego=473
                 """
             elif bloque == "super5":
@@ -782,8 +818,8 @@ def creditos(
                     cre.fecha AS fecha_credito, cre.monto AS monto_credito, 
                     per.cedula, per.nombre||' '||per.apellido AS persona, 
                     tva.denominacion AS tipo_valor, 
-                    COALESCE(SUM(det.cobro), 0.000) AS cobro_credito, 
-                    (COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) AS saldo_credito, 
+                    COALESCE(SUM(det.cobro),0.000) AS cobro_credito, 
+                    COALESCE(SUM(det.monto-det.cobro),0.000) AS saldo_credito, 
                     cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro 
                     FROM credito_cobro cre 
                     LEFT JOIN persona per ON cre.id_persona = per.id 
@@ -793,7 +829,12 @@ def creditos(
                     LEFT JOIN credito_cobro_detalle det ON det.id_credito = cre.id 
                     LEFT JOIN (SELECT * FROM operacion_bingo5_detalle_cobro WHERE id_estado=464) detcob ON cre.id_operacion = detcob.id 
                     LEFT JOIN tipo_detalle_subtipo tva ON detcob.id_tipo_valor = tva.id 
-                    LEFT JOIN (SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro FROM cobro AS cob LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro WHERE cob.id_estado=464) cob ON cre.id = cob.id_credito 
+                    LEFT JOIN (
+                        SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro 
+                        FROM cobro AS cob 
+                        LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro 
+                        WHERE cob.id_estado=464
+                    ) cob ON cre.id = cob.id_credito 
                     WHERE cre.id_estado=471 AND cre.id_tipo_juego=476
                 """
             elif bloque == "super10":
@@ -804,8 +845,8 @@ def creditos(
                     cre.fecha AS fecha_credito, cre.monto AS monto_credito, 
                     per.cedula, per.nombre||' '||per.apellido AS persona, 
                     tva.denominacion AS tipo_valor, 
-                    COALESCE(SUM(det.cobro), 0.000) AS cobro_credito, 
-                    (COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) AS saldo_credito, 
+                    COALESCE(SUM(det.cobro),0.000) AS cobro_credito, 
+                    COALESCE(SUM(det.monto-det.cobro),0.000) AS saldo_credito, 
                     cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro 
                     FROM credito_cobro cre 
                     LEFT JOIN persona per ON cre.id_persona = per.id 
@@ -815,7 +856,12 @@ def creditos(
                     LEFT JOIN credito_cobro_detalle det ON det.id_credito = cre.id 
                     LEFT JOIN (SELECT * FROM operacion_bingo10_detalle_cobro WHERE id_estado=464) detcob ON cre.id_operacion = detcob.id 
                     LEFT JOIN tipo_detalle_subtipo tva ON detcob.id_tipo_valor = tva.id 
-                    LEFT JOIN (SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro FROM cobro AS cob LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro WHERE cob.id_estado=464) cob ON cre.id = cob.id_credito 
+                    LEFT JOIN (
+                        SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro 
+                        FROM cobro AS cob 
+                        LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro 
+                        WHERE cob.id_estado=464
+                    ) cob ON cre.id = cob.id_credito 
                     WHERE cre.id_estado=471 AND cre.id_tipo_juego=479
                 """
             elif bloque == "animalitos":
@@ -826,8 +872,8 @@ def creditos(
                     cre.fecha AS fecha_credito, cre.monto AS monto_credito, 
                     per.cedula, per.nombre||' '||per.apellido AS persona, 
                     tva.denominacion AS tipo_valor, 
-                    COALESCE(SUM(det.cobro), 0.000) AS cobro_credito, 
-                    (COALESCE(SUM(det.monto), 0.000) - COALESCE(SUM(det.cobro), 0.000)) AS saldo_credito, 
+                    COALESCE(SUM(det.cobro),0.000) AS cobro_credito, 
+                    COALESCE(SUM(det.monto-det.cobro),0.000) AS saldo_credito, 
                     cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro 
                     FROM credito_cobro cre 
                     LEFT JOIN persona per ON cre.id_persona = per.id 
@@ -837,15 +883,24 @@ def creditos(
                     LEFT JOIN credito_cobro_detalle det ON det.id_credito = cre.id 
                     LEFT JOIN (SELECT * FROM operacion_bingo25_detalle_cobro WHERE id_estado=464) detcob ON cre.id_operacion = detcob.id 
                     LEFT JOIN tipo_detalle_subtipo tva ON detcob.id_tipo_valor = tva.id 
-                    LEFT JOIN (SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro FROM cobro AS cob LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro WHERE cob.id_estado=464) cob ON cre.id = cob.id_credito 
+                    LEFT JOIN (
+                        SELECT cob.id_credito, cob.numero_operacion AS operacion_cobro, cob.fecha AS fecha_cobro, det.monto AS monto_cobro 
+                        FROM cobro AS cob 
+                        LEFT JOIN cobro_detalle AS det ON cob.id = det.id_cobro 
+                        WHERE cob.id_estado=464
+                    ) cob ON cre.id = cob.id_credito 
                     WHERE cre.id_estado=471 AND cre.id_tipo_juego=480
                 """
             
+            # Agregar filtros adicionales si existen
+            # Agregar WHERE si hay filtros
             if where_filtrs:
                 bloque_sql += " AND " + " AND ".join(where_filtrs)
             
+            # Agregar GROUP BY (siempre va)
             bloque_sql += " GROUP BY tju.denominacion, cre.numero_credito, jue.fecha_sorteo, jue.serie, cre.fecha, cre.monto, per.cedula, per.nombre, per.apellido, tva.denominacion, cob.operacion_cobro, cob.fecha_cobro, cob.monto_cobro"
             
+            # Agregar HAVING si hay filtros de saldo
             if having_filtrs:
                 bloque_sql += " HAVING " + " AND ".join(having_filtrs)
             
@@ -854,14 +909,16 @@ def creditos(
     if not union_blocks:
         return {"error": "No se especificaron bloques válidos"}
 
-    # CORREGIDO: UNION ALL en lugar de UNION
-    base_union = "\nUNION ALL\n".join(union_blocks)
+    base_union = "\nUNION\n".join(union_blocks)
 
+    # Consulta final con numeración
+    
     filtro_saldo = ""
     if estado.lower() == "pendiente":
         filtro_saldo = "WHERE saldo_credito > 0"
     elif estado.lower() == "saldado":
         filtro_saldo = "WHERE saldo_credito = 0"
+    # Si es "todos", no agrega filtro    
     
     final_query = f"""
         SELECT ROW_NUMBER() OVER (ORDER BY orden, numero_credito, fecha_sorteo, cedula, persona, fecha_credito) AS item, * 
@@ -872,6 +929,7 @@ def creditos(
         ORDER BY orden, fecha_sorteo, numero_credito, cedula, persona, fecha_credito
     """
 
+    # Ejecución
     conn = None
     try:
         conn = get_db_connection()
@@ -881,6 +939,7 @@ def creditos(
         cur.close()
         conn.close()
         
+        # Limpieza de datos
         result = []
         for row in rows:
             clean_row = {}
@@ -897,16 +956,6 @@ def creditos(
         if conn:
             conn.close()
         return {"error": str(e)}
-
-
-
-
-
-
-
-
-
-
 
 # ========================================================
 # Endpoint 6: ListadoRendicionGeneral (RANGO FECHA SORTEO)
