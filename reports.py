@@ -1096,79 +1096,46 @@ def listado_rendicion_general(
 @router.get("/premios-otorgados")
 def premios_otorgados(
     fecha_sorteo_inicio: str = Query(..., description="Fecha inicio sorteo (YYYY-MM-DD)"),
-    fecha_sorteo_fin: str = Query(..., description="Fecha fin sorteo (YYYY-MM-DD)"),
-    tipo_juego: Optional[str] = Query(None, description="Filtrar por: bingo, combinado, rifa, super 5, super 10, animalitos")
+    fecha_sorteo_fin: str = Query(..., description="Fecha fin sorteo (YYYY-MM-DD)")
 ):
-    # 1. Validación de tipos de juego (ahora con nombres legibles)
-    tipos_validos = ["bingo", "combinado", "rifa", "super 5", "super 10", "animalitos"]
-    if tipo_juego and tipo_juego.lower() not in tipos_validos:
-        return {"error": f"tipo_juego debe ser uno de: {tipos_validos}"}
-
-    # 2. Mapeo de nombres a tablas de la base de datos
-    config_juegos = {
-        "bingo": ("juego", "BINGO"),
-        "combinado": ("juego_binrifa", "COMBINADO"),
-        "rifa": ("juego_rifa", "RIFA"),
-        "super 5": ("juego_bingo5", "SUPER 5"),
-        "super 10": ("juego_bingo10", "SUPER 10"),
-        "animalitos": ("juego_bingo25", "ANIMALITOS")
-    }
-
-    # Determinar qué juegos consultar
-    juegos_a_consultar = [tipo_juego.lower()] if tipo_juego else list(config_juegos.keys())
-
-    # 3. Construcción dinámica de la consulta UNION ALL
-    bloques_sql = []
+    # Consulta de DETALLE: Una línea por cada premio otorgado, incluyendo el total del sorteo
+    query = """
+        SELECT 
+            tju.denominacion AS tipo_juego,
+            COALESCE(j.fecha_sorteo, jb.fecha_sorteo, jr.fecha_sorteo, j5.fecha_sorteo, j10.fecha_sorteo, j25.fecha_sorteo) AS fecha_sorteo,
+            COALESCE(j.serie, jb.serie, jr.serie, j5.serie, j10.serie, j25.serie) AS serie,
+            cre.numero_credito,
+            per.nombre || ' ' || per.apellido AS ganador,
+            cre.monto AS monto_premio,
+            COALESCE(j.total_premio, jb.total_premio, jr.total_premio, j5.total_premio, j10.total_premio, j25.total_premio) AS premio_establecido
+        FROM credito_pago cre
+        LEFT JOIN persona per ON cre.id_persona = per.id
+        LEFT JOIN tipo_detalle_subtipo tju ON cre.id_tipo_juego = tju.id
+        -- Unimos con cada tabla de juego según el tipo para obtener fecha, serie y total_premio
+        LEFT JOIN juego j ON cre.id_tipo_juego = 471 AND cre.id_juego = j.id
+        LEFT JOIN juego_binrifa jb ON cre.id_tipo_juego = 473 AND cre.id_juego = jb.id
+        LEFT JOIN juego_rifa jr ON cre.id_tipo_juego = 429 AND cre.id_juego = jr.id
+        LEFT JOIN juego_bingo5 j5 ON cre.id_tipo_juego = 476 AND cre.id_juego = j5.id
+        LEFT JOIN juego_bingo10 j10 ON cre.id_tipo_juego = 479 AND cre.id_juego = j10.id
+        LEFT JOIN juego_bingo25 j25 ON cre.id_tipo_juego = 480 AND cre.id_juego = j25.id
+        WHERE cre.id_estado = 471 
+          AND cre.id_concepto = 483
+          AND COALESCE(j.fecha_sorteo, jb.fecha_sorteo, jr.fecha_sorteo, j5.fecha_sorteo, j10.fecha_sorteo, j25.fecha_sorteo) BETWEEN %(fsi)s AND %(fsf)s
+        ORDER BY fecha_sorteo, tipo_juego, cre.numero_credito
+    """
     
-    for clave, (tabla_juego, nombre_mostrar) in config_juegos.items():
-        if clave in juegos_a_consultar:
-            bloque = f"""
-                SELECT 
-                    '{nombre_mostrar}' AS tipo_juego,
-                    j.fecha_sorteo,
-                    j.serie,
-                    COALESCE(j.total_premio, 0) AS premio_establecido,
-                    COALESCE(p.total_pagado, 0) AS premio_otorgado,
-                    COALESCE(j.total_premio, 0) - COALESCE(p.total_pagado, 0) AS diferencia
-                FROM {tabla_juego} j
-                LEFT JOIN (
-                    SELECT 
-                        cre.id_juego,
-                        SUM(COALESCE(det.monto, pag.monto)) AS total_pagado
-                    FROM pago pag
-                    LEFT JOIN credito_pago cre ON pag.id_credito = cre.id
-                    LEFT JOIN (
-                        SELECT id_pago, SUM(monto) AS monto 
-                        FROM pago_detalle 
-                        GROUP BY id_pago
-                    ) AS det ON det.id_pago = pag.id
-                    WHERE pag.id_estado = 489 
-                      AND cre.id_juego IS NOT NULL
-                    GROUP BY cre.id_juego
-                ) p ON j.id = p.id_juego
-                WHERE j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
-            """
-            bloques_sql.append(bloque)
-
-    # Unir todos los bloques con UNION ALL
-    query_final = "\nUNION ALL\n".join(bloques_sql)
-    
-    # Ordenar el resultado final por fecha y tipo de juego
-    query_final += "\nORDER BY fecha_sorteo DESC, tipo_juego"
-
     params = {"fsi": fecha_sorteo_inicio, "fsf": fecha_sorteo_fin}
 
-    # 4. Ejecución de la consulta
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(query_final, params)
+        cur.execute(query, params)
         rows = cur.fetchall()
         cur.close()
         conn.close()
         
-        # Limpieza de datos para JSON (convertir Decimal a float)
+        # Limpieza de datos para JSON
         result = []
         for row in rows:
             clean_row = {}
@@ -1183,4 +1150,5 @@ def premios_otorgados(
         
     except Exception as e:
         if conn: conn.close()
-        return {"error": str(e)}        
+        return {"error": str(e)}
+    
