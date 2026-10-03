@@ -1090,323 +1090,97 @@ def listado_rendicion_general(
         if conn: conn.close()
         return {"error": str(e)}
     
-    # ===============================================================
-    # Endpoint 7: Premios Otorgados (RANGO FECHA SORTEO - TIPO JUEGO)
-    # ===============================================================
-    @router.get("/premios-otorgados")
-    def premios_otorgados(
-        fecha_sorteo_inicio: str = Query(..., description="Fecha inicio sorteo (YYYY-MM-DD)"),
-        fecha_sorteo_fin: str = Query(..., description="Fecha fin sorteo (YYYY-MM-DD)"),
-        id_tipo_juego: Optional[int] = Query(None, description="Filtrar por tipo: 471=BINGO, 473=COMBINADO, 429=RIFA, 476=SUPER5, 479=SUPER10, 480=ANIMALITOS")
-    ):
-        # Validación de tipos de juego permitidos
-        tipos_validos = [471, 473, 429, 476, 479, 480]
-        if id_tipo_juego is not None and id_tipo_juego not in tipos_validos:
-            return {"error": f"id_tipo_juego debe ser uno de: {tipos_validos}"}
+# ===============================================================
+# Endpoint 7: Premios Otorgados (RANGO FECHA SORTEO - TIPO JUEGO)
+# ===============================================================
+@router.get("/premios-otorgados")
+def premios_otorgados(
+    fecha_sorteo_inicio: str = Query(..., description="Fecha inicio sorteo (YYYY-MM-DD)"),
+    fecha_sorteo_fin: str = Query(..., description="Fecha fin sorteo (YYYY-MM-DD)"),
+    tipo_juego: Optional[str] = Query(None, description="Filtrar por: bingo, combinado, rifa, super 5, super 10, animalitos")
+):
+    # 1. Validación de tipos de juego (ahora con nombres legibles)
+    tipos_validos = ["bingo", "combinado", "rifa", "super 5", "super 10", "animalitos"]
+    if tipo_juego and tipo_juego.lower() not in tipos_validos:
+        return {"error": f"tipo_juego debe ser uno de: {tipos_validos}"}
 
-        # Parámetros base
-        params = {
-            "fsi": fecha_sorteo_inicio,
-            "fsf": fecha_sorteo_fin,
-            "id_concepto": 483,
-            "id_estado": 471,
-            "id_estado_pago": 489
-        }
+    # 2. Mapeo de nombres a tablas de la base de datos
+    config_juegos = {
+        "bingo": ("juego", "BINGO"),
+        "combinado": ("juego_binrifa", "COMBINADO"),
+        "rifa": ("juego_rifa", "RIFA"),
+        "super 5": ("juego_bingo5", "SUPER 5"),
+        "super 10": ("juego_bingo10", "SUPER 10"),
+        "animalitos": ("juego_bingo25", "ANIMALITOS")
+    }
 
-        # Filtro de tipo de juego (si se especifica)
-        filtro_tipo_juego = ""
-        if id_tipo_juego is not None:
-            filtro_tipo_juego = " AND cre.id_tipo_juego = %(id_tipo_juego)s"
-            params["id_tipo_juego"] = id_tipo_juego
+    # Determinar qué juegos consultar
+    juegos_a_consultar = [tipo_juego.lower()] if tipo_juego else list(config_juegos.keys())
 
-        # Consulta SQL con UNION ALL para cada tipo de juego
-        query = f"""
-            SELECT * 
-            FROM (
-                -- BINGO
+    # 3. Construcción dinámica de la consulta UNION ALL
+    bloques_sql = []
+    
+    for clave, (tabla_juego, nombre_mostrar) in config_juegos.items():
+        if clave in juegos_a_consultar:
+            bloque = f"""
                 SELECT 
-                    cre.numero_credito,
-                    per.nombre || ' ' || per.apellido AS ganador,
-                    jue.fecha_sorteo,
-                    to_char(jue.fecha_sorteo, 'DD/MM/YYYY') AS juego,
-                    cre.id_tipo_juego,
-                    tju.denominacion AS tipo_juego,
-                    cre.observacion,
-                    cre.monto,
-                    SUM(det.monto - det.pago) AS saldo,
-                    car.id_distribuidor,
-                    perd.nombre || ' ' || perd.apellido AS vendedor,
-                    detpag.numero_operacion,
-                    detpag.fecha
-                FROM credito_pago cre
-                LEFT JOIN persona per ON cre.id_persona = per.id
-                LEFT JOIN credito_pago_detalle det ON det.id_credito = cre.id
-                LEFT JOIN juego jue ON cre.id_juego = jue.id
-                LEFT JOIN tipo_detalle_subtipo tju ON cre.id_tipo_juego = tju.id
-                LEFT JOIN carton_premiado cpr ON cre.id_operacion = cpr.id
-                LEFT JOIN carton car ON car.id_juego = jue.id AND car.numero_carton = cpr.numero
-                LEFT JOIN distribuidor dis ON car.id_distribuidor = dis.id
-                LEFT JOIN persona perd ON dis.id_persona = perd.id
+                    '{nombre_mostrar}' AS tipo_juego,
+                    j.fecha_sorteo,
+                    j.serie,
+                    COALESCE(j.total_premio, 0) AS premio_establecido,
+                    COALESCE(p.total_pagado, 0) AS premio_otorgado,
+                    COALESCE(j.total_premio, 0) - COALESCE(p.total_pagado, 0) AS diferencia
+                FROM {tabla_juego} j
                 LEFT JOIN (
-                    SELECT det.id_credito_pago_detalle, pag.numero_operacion, pag.fecha
-                    FROM pago_detalle det
-                    LEFT JOIN pago pag ON det.id_pago = pag.id
-                    WHERE pag.id_estado = %(id_estado_pago)s
-                ) AS detpag ON detpag.id_credito_pago_detalle = det.id
-                WHERE cre.id_concepto = %(id_concepto)s 
-                AND cre.id_estado = %(id_estado)s 
-                AND tju.denominacion = 'BINGO'
-                AND jue.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
-                {filtro_tipo_juego}
-                GROUP BY 
-                    cre.id, det.id, cre.numero_credito, per.nombre, per.apellido,
-                    tju.denominacion, cre.monto, jue.fecha_sorteo, jue.serie,
-                    car.id_distribuidor, perd.nombre, perd.apellido,
-                    detpag.numero_operacion, detpag.fecha
-                
-                UNION ALL
-                
-                -- COMBINADO
-                SELECT 
-                    cre.numero_credito,
-                    per.nombre || ' ' || per.apellido AS ganador,
-                    jue.fecha_sorteo,
-                    to_char(jue.fecha_sorteo, 'DD/MM/YYYY') || ' / SERIE: ' || jue.serie AS juego,
-                    cre.id_tipo_juego,
-                    tju.denominacion AS tipo_juego,
-                    cre.observacion,
-                    cre.monto,
-                    SUM(det.monto - det.pago) AS saldo,
-                    car.id_distribuidor,
-                    perd.nombre || ' ' || perd.apellido AS vendedor,
-                    detpag.numero_operacion,
-                    detpag.fecha
-                FROM credito_pago cre
-                LEFT JOIN persona per ON cre.id_persona = per.id
-                LEFT JOIN credito_pago_detalle det ON det.id_credito = cre.id
-                LEFT JOIN juego_binrifa jue ON cre.id_juego = jue.id
-                LEFT JOIN tipo_detalle_subtipo tju ON cre.id_tipo_juego = tju.id
-                LEFT JOIN carton_premiado_binrifa cpr ON cre.id_operacion = cpr.id
-                LEFT JOIN carton_binrifa car ON car.id_juego = jue.id AND car.numero_carton = cpr.numero
-                LEFT JOIN distribuidor dis ON car.id_distribuidor = dis.id
-                LEFT JOIN persona perd ON dis.id_persona = perd.id
-                LEFT JOIN (
-                    SELECT det.id_credito_pago_detalle, pag.numero_operacion, pag.fecha
-                    FROM pago_detalle det
-                    LEFT JOIN pago pag ON det.id_pago = pag.id
-                    WHERE pag.id_estado = %(id_estado_pago)s
-                ) AS detpag ON detpag.id_credito_pago_detalle = det.id
-                WHERE cre.id_concepto = %(id_concepto)s 
-                AND cre.id_estado = %(id_estado)s 
-                AND tju.denominacion = 'COMBINADO'
-                AND jue.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
-                {filtro_tipo_juego}
-                GROUP BY 
-                    cre.id, det.id, cre.numero_credito, per.nombre, per.apellido,
-                    tju.denominacion, cre.monto, jue.fecha_sorteo, jue.serie,
-                    car.id_distribuidor, perd.nombre, perd.apellido,
-                    detpag.numero_operacion, detpag.fecha
-                
-                UNION ALL
-                
-                -- SUPER 5
-                SELECT 
-                    cre.numero_credito,
-                    per.nombre || ' ' || per.apellido AS ganador,
-                    jue.fecha_sorteo,
-                    to_char(jue.fecha_sorteo, 'DD/MM/YYYY') || ' / SERIE: ' || jue.serie AS juego,
-                    cre.id_tipo_juego,
-                    tju.denominacion AS tipo_juego,
-                    cre.observacion,
-                    cre.monto,
-                    SUM(det.monto - det.pago) AS saldo,
-                    car.id_distribuidor,
-                    perd.nombre || ' ' || perd.apellido AS vendedor,
-                    detpag.numero_operacion,
-                    detpag.fecha
-                FROM credito_pago cre
-                LEFT JOIN persona per ON cre.id_persona = per.id
-                LEFT JOIN credito_pago_detalle det ON det.id_credito = cre.id
-                LEFT JOIN juego_bingo5 jue ON cre.id_juego = jue.id
-                LEFT JOIN tipo_detalle_subtipo tju ON cre.id_tipo_juego = tju.id
-                LEFT JOIN carton_premiado_bingo5 cpr ON cre.id_operacion = cpr.id
-                LEFT JOIN carton_bingo5 car ON car.id_juego = jue.id AND car.numero_carton = cpr.numero
-                LEFT JOIN distribuidor dis ON car.id_distribuidor = dis.id
-                LEFT JOIN persona perd ON dis.id_persona = perd.id
-                LEFT JOIN (
-                    SELECT det.id_credito_pago_detalle, pag.numero_operacion, pag.fecha
-                    FROM pago_detalle det
-                    LEFT JOIN pago pag ON det.id_pago = pag.id
-                    WHERE pag.id_estado = %(id_estado_pago)s
-                ) AS detpag ON detpag.id_credito_pago_detalle = det.id
-                WHERE cre.id_concepto = %(id_concepto)s 
-                AND cre.id_estado = %(id_estado)s 
-                AND tju.denominacion = 'SUPER 5'
-                AND jue.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
-                {filtro_tipo_juego}
-                GROUP BY 
-                    cre.id, det.id, cre.numero_credito, per.nombre, per.apellido,
-                    tju.denominacion, cre.monto, jue.fecha_sorteo, jue.serie,
-                    car.id_distribuidor, perd.nombre, perd.apellido,
-                    detpag.numero_operacion, detpag.fecha
-                
-                UNION ALL
-                
-                -- SUPER 10
-                SELECT 
-                    cre.numero_credito,
-                    per.nombre || ' ' || per.apellido AS ganador,
-                    jue.fecha_sorteo,
-                    to_char(jue.fecha_sorteo, 'DD/MM/YYYY') || ' / SERIE: ' || jue.serie AS juego,
-                    cre.id_tipo_juego,
-                    tju.denominacion AS tipo_juego,
-                    cre.observacion,
-                    cre.monto,
-                    SUM(det.monto - det.pago) AS saldo,
-                    car.id_distribuidor,
-                    perd.nombre || ' ' || perd.apellido AS vendedor,
-                    detpag.numero_operacion,
-                    detpag.fecha
-                FROM credito_pago cre
-                LEFT JOIN persona per ON cre.id_persona = per.id
-                LEFT JOIN credito_pago_detalle det ON det.id_credito = cre.id
-                LEFT JOIN juego_bingo10 jue ON cre.id_juego = jue.id
-                LEFT JOIN tipo_detalle_subtipo tju ON cre.id_tipo_juego = tju.id
-                LEFT JOIN carton_premiado_bingo10 cpr ON cre.id_operacion = cpr.id
-                LEFT JOIN carton_bingo10 car ON car.id_juego = jue.id AND car.numero_carton = cpr.numero
-                LEFT JOIN distribuidor dis ON car.id_distribuidor = dis.id
-                LEFT JOIN persona perd ON dis.id_persona = perd.id
-                LEFT JOIN (
-                    SELECT det.id_credito_pago_detalle, pag.numero_operacion, pag.fecha
-                    FROM pago_detalle det
-                    LEFT JOIN pago pag ON det.id_pago = pag.id
-                    WHERE pag.id_estado = %(id_estado_pago)s
-                ) AS detpag ON detpag.id_credito_pago_detalle = det.id
-                WHERE cre.id_concepto = %(id_concepto)s 
-                AND cre.id_estado = %(id_estado)s 
-                AND tju.denominacion = 'SUPER 10'
-                AND jue.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
-                {filtro_tipo_juego}
-                GROUP BY 
-                    cre.id, det.id, cre.numero_credito, per.nombre, per.apellido,
-                    tju.denominacion, cre.monto, jue.fecha_sorteo, jue.serie,
-                    car.id_distribuidor, perd.nombre, perd.apellido,
-                    detpag.numero_operacion, detpag.fecha
-                
-                UNION ALL
-                
-                -- RIFA
-                SELECT 
-                    cre.numero_credito,
-                    per.nombre || ' ' || per.apellido AS ganador,
-                    jue.fecha_sorteo,
-                    to_char(jue.fecha_sorteo, 'DD/MM/YYYY') || ' / SERIE: ' || jue.serie AS juego,
-                    cre.id_tipo_juego,
-                    tju.denominacion AS tipo_juego,
-                    cre.observacion,
-                    cre.monto,
-                    SUM(det.monto - det.pago) AS saldo,
-                    car.id_distribuidor,
-                    perd.nombre || ' ' || perd.apellido AS vendedor,
-                    detpag.numero_operacion,
-                    detpag.fecha
-                FROM credito_pago cre
-                LEFT JOIN persona per ON cre.id_persona = per.id
-                LEFT JOIN credito_pago_detalle det ON det.id_credito = cre.id
-                LEFT JOIN juego_rifa jue ON cre.id_juego = jue.id
-                LEFT JOIN tipo_detalle_subtipo tju ON cre.id_tipo_juego = tju.id
-                LEFT JOIN carton_premiado_rifa cpr ON cre.id_operacion = cpr.id
-                LEFT JOIN carton_rifa car ON car.id_juego = jue.id AND car.numero_carton = cpr.numero
-                LEFT JOIN distribuidor dis ON car.id_distribuidor = dis.id
-                LEFT JOIN persona perd ON dis.id_persona = perd.id
-                LEFT JOIN (
-                    SELECT det.id_credito_pago_detalle, pag.numero_operacion, pag.fecha
-                    FROM pago_detalle det
-                    LEFT JOIN pago pag ON det.id_pago = pag.id
-                    WHERE pag.id_estado = %(id_estado_pago)s
-                ) AS detpag ON detpag.id_credito_pago_detalle = det.id
-                WHERE cre.id_concepto = %(id_concepto)s 
-                AND cre.id_estado = %(id_estado)s 
-                AND tju.denominacion = 'RIFA'
-                AND jue.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
-                {filtro_tipo_juego}
-                GROUP BY 
-                    cre.id, det.id, cre.numero_credito, per.nombre, per.apellido,
-                    tju.denominacion, cre.monto, jue.fecha_sorteo, jue.serie,
-                    car.id_distribuidor, perd.nombre, perd.apellido,
-                    detpag.numero_operacion, detpag.fecha
-                
-                UNION ALL
-                
-                -- ANIMALITOS
-                SELECT 
-                    cre.numero_credito,
-                    per.nombre || ' ' || per.apellido AS ganador,
-                    jue.fecha_sorteo,
-                    to_char(jue.fecha_sorteo, 'DD/MM/YYYY') || ' / SERIE: ' || jue.serie AS juego,
-                    cre.id_tipo_juego,
-                    tju.denominacion AS tipo_juego,
-                    cre.observacion,
-                    cre.monto,
-                    SUM(det.monto - det.pago) AS saldo,
-                    car.id_distribuidor,
-                    perd.nombre || ' ' || perd.apellido AS vendedor,
-                    detpag.numero_operacion,
-                    detpag.fecha
-                FROM credito_pago cre
-                LEFT JOIN persona per ON cre.id_persona = per.id
-                LEFT JOIN credito_pago_detalle det ON det.id_credito = cre.id
-                LEFT JOIN juego_bingo25 jue ON cre.id_juego = jue.id
-                LEFT JOIN tipo_detalle_subtipo tju ON cre.id_tipo_juego = tju.id
-                LEFT JOIN carton_premiado_bingo25 cpr ON cre.id_operacion = cpr.id
-                LEFT JOIN carton_bingo25 car ON car.id_juego = jue.id AND car.numero_carton = cpr.numero
-                LEFT JOIN distribuidor dis ON car.id_distribuidor = dis.id
-                LEFT JOIN persona perd ON dis.id_persona = perd.id
-                LEFT JOIN (
-                    SELECT det.id_credito_pago_detalle, pag.numero_operacion, pag.fecha
-                    FROM pago_detalle det
-                    LEFT JOIN pago pag ON det.id_pago = pag.id
-                    WHERE pag.id_estado = %(id_estado_pago)s
-                ) AS detpag ON detpag.id_credito_pago_detalle = det.id
-                WHERE cre.id_concepto = %(id_concepto)s 
-                AND cre.id_estado = %(id_estado)s 
-                AND tju.denominacion = 'ANIMALITOS'
-                AND jue.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
-                {filtro_tipo_juego}
-                GROUP BY 
-                    cre.id, det.id, cre.numero_credito, per.nombre, per.apellido,
-                    tju.denominacion, cre.monto, jue.fecha_sorteo, jue.serie,
-                    car.id_distribuidor, perd.nombre, perd.apellido,
-                    detpag.numero_operacion, detpag.fecha
-            ) AS res
-            ORDER BY juego, tipo_juego, numero_credito
-        """
+                    SELECT 
+                        cre.id_juego,
+                        SUM(COALESCE(det.monto, pag.monto)) AS total_pagado
+                    FROM pago pag
+                    LEFT JOIN credito_pago cre ON pag.id_credito = cre.id
+                    LEFT JOIN (
+                        SELECT id_pago, SUM(monto) AS monto 
+                        FROM pago_detalle 
+                        GROUP BY id_pago
+                    ) AS det ON det.id_pago = pag.id
+                    WHERE pag.id_estado = 489 
+                      AND cre.id_juego IS NOT NULL
+                    GROUP BY cre.id_juego
+                ) p ON j.id = p.id_juego
+                WHERE j.fecha_sorteo BETWEEN %(fsi)s AND %(fsf)s
+            """
+            bloques_sql.append(bloque)
 
-        # Ejecución
-        conn = None
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute(query, params)
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
-            
-            # Limpieza de datos
-            result = []
-            for row in rows:
-                clean_row = {}
-                for k, v in dict(row).items():
-                    if hasattr(v, '__float__'):
-                        clean_row[k] = float(v)
-                    else:
-                        clean_row[k] = v
-                result.append(clean_row)
-                
-            return result
-            
-        except Exception as e:
-            if conn:
-                conn.close()
-            return {"error": str(e)}
+    # Unir todos los bloques con UNION ALL
+    query_final = "\nUNION ALL\n".join(bloques_sql)
+    
+    # Ordenar el resultado final por fecha y tipo de juego
+    query_final += "\nORDER BY fecha_sorteo DESC, tipo_juego"
+
+    params = {"fsi": fecha_sorteo_inicio, "fsf": fecha_sorteo_fin}
+
+    # 4. Ejecución de la consulta
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(query_final, params)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
         
+        # Limpieza de datos para JSON (convertir Decimal a float)
+        result = []
+        for row in rows:
+            clean_row = {}
+            for k, v in dict(row).items():
+                if hasattr(v, '__float__'):
+                    clean_row[k] = float(v)
+                else:
+                    clean_row[k] = v
+            result.append(clean_row)
+            
+        return result
+        
+    except Exception as e:
+        if conn: conn.close()
+        return {"error": str(e)}        
