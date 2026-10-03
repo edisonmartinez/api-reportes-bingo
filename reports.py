@@ -1137,8 +1137,8 @@ def premios_otorgados(
         monto,
         saldo,
         vendedor,
-        numero_operacion,
-        fecha_pago
+        COALESCE(ope.numero_operacion, 0) AS numero_operacion,
+        COALESCE(ope.fecha::text, 'N/A') AS fecha,fecha_pago
     FROM (
         -- BINGO
         SELECT 
