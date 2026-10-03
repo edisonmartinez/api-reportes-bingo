@@ -1097,7 +1097,7 @@ def listado_rendicion_general(
 def creditos_pagos_premios(
     fecha_sorteo_inicio: Optional[str] = Query(None, description="Fecha inicio sorteo (YYYY-MM-DD)"),
     fecha_sorteo_fin: Optional[str] = Query(None, description="Fecha fin sorteo (YYYY-MM-DD)"),
-    id_tipo_juego: Optional[int] = Query(None, description="ID tipo juego (471=Bingo, 473=Combinado, 429=Rifa, 476=Super5, 479=Super10, 480=Animalitos)"),
+    id_tipo_juego: Optional[int] = Query(None, description="ID tipo juego (430=Bingo, 473=Combinado, 429=Rifa, 476=Super5, 479=Super10, 480=Animalitos)"),
     ganador: Optional[str] = Query(None, description="Buscar por nombre del ganador"),
     vendedor: Optional[str] = Query(None, description="Buscar por nombre del vendedor")
 ):
